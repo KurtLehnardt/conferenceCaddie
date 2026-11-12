@@ -7,7 +7,7 @@
   "canonical_format": "caddie-admin-v2\\n<METHOD>\\n<pathname + search>\\n<bodySha256>\\n<ts>\\n<nonce>\\n<origin>\\n",
   "v1_header_re": "^v1 (0|[1-9]\\d{0,11}) ([A-Za-z0-9_-]{22}) ([0-9a-f]{64}) ([0-9a-f]{64})$",
   "v1_canonical_format": "caddie-admin-v1\\n<METHOD>\\n<pathname + search>\\n<bodySha256>\\n<ts>\\n<nonce>\\n",
-  "origin_rule": "x is a string; t = x.trim() (String.prototype.trim); t matches ^[\\x21-\\x7e]+$ (printable ASCII) and ^https?:// (case-insensitive), holds no \"@\", \"\\\", \"%\" or \",\" (origin_forbidden_re), and matches origin_allow_re (case-insensitive; it implies the three checks before it); new URL(t) has protocol http: or https:, pathname \"/\", and empty search, hash, username and password; the result is new URL(t).origin. Anything else is refused.",
+  "origin_rule": "x is a string; t = x.trim() (String.prototype.trim); t matches ^[\\x21-\\x7e]+$ (printable ASCII) and ^https?:// (case-insensitive), holds no \"@\", \"\\\", \"%\" or \",\" (origin_forbidden_re), and matches origin_allow_re (case-insensitive; it implies the three checks before it); new URL(t) has protocol http: or https:, pathname \"/\", and empty search, hash, username and password; its hostname is the typed host in lower case and its port the typed port with the default port of the scheme (or an empty port) dropped, so a host the parser rewrites (a numeric IPv4 form other than a canonical dotted quad, an IPv6 address not in its canonical compressed form, a port with a leading zero) is refused; the result is new URL(t).origin. Anything else is refused.",
   "origin_chars_re": "^[\\x21-\\x7e]+$",
   "origin_prefix_re": "^https?:\\/\\/",
   "origin_forbidden_re": "[@\\\\%,]",
@@ -1051,9 +1051,9 @@
       }
     },
     {
-      "id": "v-expected-ipv6-long",
+      "id": "v-expected-ipv6-uppercase",
       "kind": "verify",
-      "title": "An expected IPv6 origin written in full matches the compressed form",
+      "title": "An expected IPv6 origin in upper case matches the lowercase form the client signed",
       "header": "v2 1762848000 M3omM9LyVSGGb-zGT8kYHA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 f4979283899014f0974add72ca80e3816a7b57e8bb450efbe6d1653c4c086a99",
       "method": "GET",
       "path_with_query": "/admin/stats?event=testconf-2099",
@@ -1065,7 +1065,7 @@
         2
       ],
       "expected_origins": [
-        "http://[0:0:0:0:0:0:0:1]:8787"
+        "HTTP://[::1]:8787"
       ],
       "now": 1762848000,
       "expect": {
@@ -2251,6 +2251,21 @@
       "reject": "url"
     },
     {
+      "id": "reject-v2-base-ipv4-hex",
+      "kind": "reject",
+      "title": "A hexadecimal shorthand IPv4, which the URL parser would read as 127.0.0.1",
+      "call": "sign",
+      "input": {
+        "base": "http://0x7f.1:8787",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "body": null,
+        "method": "GET",
+        "path": "/admin/stats",
+        "version": 2
+      },
+      "reject": "url"
+    },
+    {
       "id": "reject-v2-path-double-slash",
       "kind": "reject",
       "title": "A path starting with \"//\" (as in v1)",
@@ -2539,6 +2554,58 @@
         "expected_origins": [
           "https://caddie.example",
           "https://caddie.example/admin"
+        ]
+      },
+      "reject": "expected_origins"
+    },
+    {
+      "id": "reject-verify-origins-ipv6-long",
+      "kind": "reject",
+      "title": "An entry with an IPv6 address written in full: the whole list is refused",
+      "note": "On the Worker, ADMIN_ORIGIN set with this entry is invalid configuration: 404 for every admin request, v1 included, with no failed-auth charge.",
+      "call": "verify",
+      "node_api_only": false,
+      "input": {
+        "header": "v2 1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 617d89add44f8a483a40b9c257a37136b4a55f391ccb48a1ca4f5f71f7977733",
+        "method": "GET",
+        "path_with_query": "/admin/stats?event=testconf-2099",
+        "keys": [
+          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ],
+        "now": 1762848000,
+        "allowed_versions": [
+          1,
+          2
+        ],
+        "expected_origins": [
+          "https://caddie.example",
+          "http://[0:0:0:0:0:0:0:1]:8787"
+        ]
+      },
+      "reject": "expected_origins"
+    },
+    {
+      "id": "reject-verify-origins-ipv4-integer",
+      "kind": "reject",
+      "title": "An entry with an IPv4 address as one integer: the whole list is refused",
+      "note": "On the Worker, ADMIN_ORIGIN set with this entry is invalid configuration: 404 for every admin request, v1 included, with no failed-auth charge.",
+      "call": "verify",
+      "node_api_only": false,
+      "input": {
+        "header": "v2 1762848000 AAAAAAAAAAAAAAAAAAAAAA e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 617d89add44f8a483a40b9c257a37136b4a55f391ccb48a1ca4f5f71f7977733",
+        "method": "GET",
+        "path_with_query": "/admin/stats?event=testconf-2099",
+        "keys": [
+          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ],
+        "now": 1762848000,
+        "allowed_versions": [
+          1,
+          2
+        ],
+        "expected_origins": [
+          "https://caddie.example",
+          "https://2130706433"
         ]
       },
       "reject": "expected_origins"
@@ -3083,21 +3150,120 @@
       }
     },
     {
-      "id": "origin-ipv4-hex",
+      "id": "origin-refused-ipv4-hex",
       "kind": "origin",
-      "title": "A hexadecimal IPv4 part is normalised",
+      "title": "A hexadecimal IPv4 part (the parser would read 127.0.0.1)",
       "input": "https://0x7f.0.0.1",
       "expect": {
-        "origin": "https://127.0.0.1"
+        "origin": null
       }
     },
     {
-      "id": "origin-ipv6-long",
+      "id": "origin-refused-ipv4-hex-short",
       "kind": "origin",
-      "title": "An IPv6 address is compressed",
+      "title": "A hexadecimal shorthand IPv4 with a port (the parser would read 127.0.0.1:8787)",
+      "input": "http://0x7f.1:8787",
+      "expect": {
+        "origin": null
+      }
+    },
+    {
+      "id": "origin-refused-ipv4-integer",
+      "kind": "origin",
+      "title": "An IPv4 address as one integer (the parser would read 127.0.0.1)",
+      "input": "https://2130706433",
+      "expect": {
+        "origin": null
+      }
+    },
+    {
+      "id": "origin-refused-ipv4-octal",
+      "kind": "origin",
+      "title": "An octal IPv4 part (the parser would read 127.0.0.1)",
+      "input": "http://0177.0.0.1",
+      "expect": {
+        "origin": null
+      }
+    },
+    {
+      "id": "origin-refused-ipv4-leading-zeros",
+      "kind": "origin",
+      "title": "Leading zeros in an IPv4 part (the parser would read 127.0.0.1)",
+      "input": "http://127.000.0.1",
+      "expect": {
+        "origin": null
+      }
+    },
+    {
+      "id": "origin-refused-ipv4-shorthand",
+      "kind": "origin",
+      "title": "A shorthand IPv4 (the parser would read 127.0.0.1)",
+      "input": "http://127.1",
+      "expect": {
+        "origin": null
+      }
+    },
+    {
+      "id": "origin-refused-ipv4-trailing-dot",
+      "kind": "origin",
+      "title": "A dotted quad with a trailing dot (the parser would drop the dot)",
+      "input": "https://192.168.1.10.",
+      "expect": {
+        "origin": null
+      }
+    },
+    {
+      "id": "origin-refused-ipv6-long",
+      "kind": "origin",
+      "title": "An IPv6 address written in full (the parser would compress it)",
       "input": "http://[0:0:0:0:0:0:0:1]:8787",
       "expect": {
+        "origin": null
+      }
+    },
+    {
+      "id": "origin-refused-ipv6-mapped-dotted",
+      "kind": "origin",
+      "title": "An IPv4-mapped IPv6 address with a dotted quad (the parser would write it in hex)",
+      "input": "http://[::ffff:127.0.0.1]",
+      "expect": {
+        "origin": null
+      }
+    },
+    {
+      "id": "origin-refused-port-leading-zero",
+      "kind": "origin",
+      "title": "A port with a leading zero (the parser would drop the zero)",
+      "input": "http://127.0.0.1:08787",
+      "expect": {
+        "origin": null
+      }
+    },
+    {
+      "id": "origin-ipv4-dotted-quad",
+      "kind": "origin",
+      "title": "A canonical dotted quad is kept",
+      "input": "https://192.168.1.10",
+      "expect": {
+        "origin": "https://192.168.1.10"
+      }
+    },
+    {
+      "id": "origin-ipv6-loopback",
+      "kind": "origin",
+      "title": "The canonical IPv6 loopback with a port is kept",
+      "input": "http://[::1]:8787",
+      "expect": {
         "origin": "http://[::1]:8787"
+      }
+    },
+    {
+      "id": "origin-ipv6-uppercase",
+      "kind": "origin",
+      "title": "A canonical IPv6 address in upper case is lowercased",
+      "input": "http://[::FFFF:7F00:1]:8787",
+      "expect": {
+        "origin": "http://[::ffff:7f00:1]:8787"
       }
     },
     {
@@ -3524,6 +3690,71 @@
       "expect": {
         "mode": "invalid",
         "origins": []
+      }
+    },
+    {
+      "id": "admin-origin-ipv4-integer",
+      "setting": "ADMIN_ORIGIN",
+      "title": "An IPv4 address as one integer, which the parser would rewrite: invalid",
+      "raw": "https://caddie.example,https://2130706433",
+      "expect": {
+        "mode": "invalid",
+        "origins": []
+      }
+    },
+    {
+      "id": "admin-origin-ipv4-hex",
+      "setting": "ADMIN_ORIGIN",
+      "title": "A hexadecimal shorthand IPv4 with a port: invalid",
+      "raw": "http://0x7f.1:8787",
+      "expect": {
+        "mode": "invalid",
+        "origins": []
+      }
+    },
+    {
+      "id": "admin-origin-ipv4-octal",
+      "setting": "ADMIN_ORIGIN",
+      "title": "An octal IPv4 part: invalid",
+      "raw": "http://0177.0.0.1:8787",
+      "expect": {
+        "mode": "invalid",
+        "origins": []
+      }
+    },
+    {
+      "id": "admin-origin-ipv6-long",
+      "setting": "ADMIN_ORIGIN",
+      "title": "An IPv6 address written in full: invalid",
+      "raw": "http://[0:0:0:0:0:0:0:1]:8787",
+      "expect": {
+        "mode": "invalid",
+        "origins": []
+      }
+    },
+    {
+      "id": "admin-origin-loopbacks",
+      "setting": "ADMIN_ORIGIN",
+      "title": "A canonical dotted quad and the canonical IPv6 loopback, each with a port",
+      "raw": "http://127.0.0.1:8787,http://[::1]:8787",
+      "expect": {
+        "mode": "list",
+        "origins": [
+          "http://127.0.0.1:8787",
+          "http://[::1]:8787"
+        ]
+      }
+    },
+    {
+      "id": "admin-origin-dotted-quad",
+      "setting": "ADMIN_ORIGIN",
+      "title": "A canonical private dotted quad",
+      "raw": "https://192.168.1.10",
+      "expect": {
+        "mode": "list",
+        "origins": [
+          "https://192.168.1.10"
+        ]
       }
     },
     {

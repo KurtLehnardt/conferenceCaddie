@@ -23,15 +23,18 @@
 //                        Default web/dist-worker against the Worker on BASE_URL's origin, else web/dist.
 //   ADMIN_TOKEN or ADMIN_TOKEN_FILE  the Worker's admin token. The file is read as caddie-admin reads
 //                        it (mode 0600, the whole file trimmed), so both use the same key. A set but
-//                        empty ADMIN_TOKEN_FILE means no token. With neither set, a signed run whose
-//                        API_BASE origin is exactly the api of a tier 2 backend in caddie-admin's
-//                        config.json, and is not on this machine (a local Worker has its own token in
-//                        worker/.dev.vars), reads the token file caddie-admin reads:
-//                        <config dir>/admin-token, the config dir being CADDIE_ADMIN_HOME, else
-//                        $XDG_CONFIG_HOME/conference-caddie, else ~/.config/conference-caddie. When that
-//                        file does not exist and CADDIE_ADMIN_HOME is unset, the old
-//                        ~/.config/conference-caddie/admin-token is read, if the config.json beside it
-//                        (when there is one) lists that origin too, and a NOTE line says to move it.
+//                        empty ADMIN_TOKEN_FILE means no token. With neither set, a run whose origin as
+//                        typed (API_BASE, or the scheme and host of BASE_URL; canonicalOrigin below) is
+//                        exactly the api of a tier 2 backend in caddie-admin's config.json, and is not
+//                        on this machine (a local Worker has its own token in worker/.dev.vars), reads
+//                        the token file caddie-admin reads: <config dir>/admin-token, the config dir
+//                        being CADDIE_ADMIN_HOME, else $XDG_CONFIG_HOME/conference-caddie, else
+//                        ~/.config/conference-caddie. When that file does not exist and
+//                        CADDIE_ADMIN_HOME is unset, the old ~/.config/conference-caddie/admin-token is
+//                        read, if the config.json beside it (when there is one) lists that origin too,
+//                        and a NOTE line says to move it. The fallback fails closed: an old path, or a
+//                        config.json beside it, that cannot be checked (a directory on its path cannot
+//                        be searched) is not read, and a NOTE line says so.
 //                        Any other API_BASE needs ADMIN_TOKEN or ADMIN_TOKEN_FILE. With a token the
 //                        three Elasticsearch helpers below are replaced by the Worker's test
 //                        fixtures: POST /admin/test/profile (the expired profile),
@@ -225,12 +228,13 @@ const API_ORIGIN_TYPED = canonicalOrigin(API_BASE_TYPED);
 // The default file is the production Worker's token, and a v1 signed request is not bound to a host:
 // whoever receives one can replay it to the Worker within the five-minute window (a v2 one is bound
 // to API_BASE's origin, but CADDIE_ADMIN_SIG_VERSION=1 still signs v1 until step d). So it is read
-// only when API_BASE's origin, as typed, is exactly the api of a tier 2 backend in caddie-admin's
-// config.json (configuredWorkerOrigins: https or http to this machine, an origin that
+// only when the origin as typed (API_BASE_TYPED) is exactly the api of a tier 2 backend in
+// caddie-admin's config.json (configuredWorkerOrigins: https or http to this machine, an origin that
 // canonicalOrigin accepts), that origin is not on this machine (a local Worker has its own token in
 // worker/.dev.vars) and SMOKE_API is not cloudrun. The old path is read only without
 // CADDIE_ADMIN_HOME and only if the config.json beside it, when there is one, lists the origin too
-// (resolveAdminTokenFile). Any other API_BASE needs ADMIN_TOKEN or ADMIN_TOKEN_FILE. The token is never
+// (resolveAdminTokenFile); an old path or config.json that cannot be checked is not read (the
+// fallback fails closed, with a NOTE). Any other API_BASE needs ADMIN_TOKEN or ADMIN_TOKEN_FILE. The token is never
 // printed; a NOTE about a file that was read is printed only after the read succeeded.
 const defaultTokenFileApplies = () => API_KIND_ENV !== 'cloudrun'
   && API_ORIGIN_TYPED === API_ORIGIN

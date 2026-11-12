@@ -73,6 +73,14 @@ function portOrigin(value) {
   }
   if (!fixture.origin_protocols.includes(u.protocol)) return null;
   if (u.pathname !== '/' || u.search !== '' || u.hash !== '' || u.username !== '' || u.password !== '') return null;
+  // The parser rewrote nothing: its host is the typed one in lower case, its port the typed one
+  // with the scheme's default (or an empty port) dropped.
+  const authority = text.slice(text.indexOf('//') + 2).replace(/\/$/, '');
+  const colon = authority.startsWith('[') ? authority.indexOf(':', authority.indexOf(']')) : authority.indexOf(':');
+  const typedHost = colon === -1 ? authority : authority.slice(0, colon);
+  const typedPort = colon === -1 ? '' : authority.slice(colon + 1);
+  if (u.hostname !== typedHost.toLowerCase()) return null;
+  if (u.port !== (typedPort === { 'http:': '80', 'https:': '443' }[u.protocol] ? '' : typedPort)) return null;
   return u.origin;
 }
 

@@ -464,9 +464,9 @@ variable from the clients and the workflow in the same change. `scripts/moderati
 deprecated wrapper in this directory) signs nothing and sends nothing; it only names the
 `caddie-admin` command to use.
 
-Step c does not yet cover every client. The `caddie-admin` CLI (`scripts/admin/`) and
-`scripts/smoke.mjs` still sign v1 and move to v2 in their own step-c change. Step d must wait
-until both of them sign v2, because a Worker that refuses v1 would refuse them too.
+Step c covers every client: since #93 the `caddie-admin` CLI (`scripts/admin/`) and
+`scripts/smoke.mjs` sign v2 too. What step d still waits for is a local `wrangler dev` smoke
+under v2, then the move of `ADMIN_SIG_MIN` to `"2"`.
 
 Two optional Worker variables decide what is accepted. Neither is set in `wrangler.toml` today.
 

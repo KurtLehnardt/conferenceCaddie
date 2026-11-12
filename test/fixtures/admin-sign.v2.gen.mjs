@@ -40,7 +40,8 @@ const canonicalV2 = ({ method, pathWithQuery, bodySha256, ts, nonce, origin }) =
 // prefix in any case; no "@", backslash, "%" or ","; the whole value a scheme, "//", a host of
 // letters, digits, "." and "-" or a bracketed IPv6 address, an optional port and an optional "/";
 // then an http: or https: URL with path "/" and no query, fragment, user name or password, whose
-// .origin is the result.
+// host is the typed host in lower case and whose port is the typed port with the scheme's default
+// (or an empty port) dropped, so the parser rewrote nothing; its .origin is the result.
 const ALLOW_SRC = '^https?:\\/\\/(?:[A-Za-z0-9.-]+|\\[[0-9A-Fa-f:.]+\\])(?::[0-9]*)?\\/?$';
 function originOf(value) {
   if (typeof value !== 'string') return null;
@@ -55,6 +56,10 @@ function originOf(value) {
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
   if (u.pathname !== '/' || u.search || u.hash || u.username || u.password) return null;
+  const m = /^https?:\/\/([^:/]+|\[[^\]]+\])(?::(\d*))?\/?$/i.exec(text);
+  const port = m[2] ?? '';
+  if (u.hostname !== m[1].toLowerCase()) return null;
+  if (u.port !== (port === (u.protocol === 'https:' ? '443' : '80') ? '' : port)) return null;
   return u.origin;
 }
 
@@ -231,7 +236,7 @@ export function buildFixture() {
   v({ id: 'v-expected-default-port', title: 'An expected origin with the default port is normalised', header: getStats.header, ...getArgs, expectedOrigins: ['https://caddie.example:443'], expect: okExpect(EMPTY, 2, PROD) });
   v({ id: 'v-expected-trailing-slash', title: 'An expected origin with a trailing "/" is normalised', header: getStats.header, ...getArgs, expectedOrigins: ['https://caddie.example/'], expect: okExpect(EMPTY, 2, PROD) });
   v({ id: 'v-expected-punycode', title: 'An expected punycode origin written in upper case matches the punycode the client signed', header: puny.header, ...getArgs, expectedOrigins: ['https://XN--BCHER-KVA.example'], expect: okExpect(EMPTY, 2, puny.origin) });
-  v({ id: 'v-expected-ipv6-long', title: 'An expected IPv6 origin written in full matches the compressed form', header: ipv6.header, ...getArgs, expectedOrigins: ['http://[0:0:0:0:0:0:0:1]:8787'], expect: okExpect(EMPTY, 2, ipv6.origin) });
+  v({ id: 'v-expected-ipv6-uppercase', title: 'An expected IPv6 origin in upper case matches the lowercase form the client signed', header: ipv6.header, ...getArgs, expectedOrigins: ['HTTP://[::1]:8787'], expect: okExpect(EMPTY, 2, ipv6.origin) });
 
   // Versions.
   const v1Get = { canonical: canonicalV1({ method: 'GET', pathWithQuery: getStats.path_with_query, bodySha256: EMPTY, ts: TS, nonce: getStats.nonce }) };
@@ -306,6 +311,7 @@ export function buildFixture() {
   r({ id: 'reject-v2-base-empty-userinfo', title: 'An empty userinfo ("@" before the host)', input: { base: 'https://@caddie.example' }, reject: 'url' });
   r({ id: 'reject-v2-base-with-path', title: 'A base with a path (as in v1)', input: { base: 'https://caddie.example/prefix' }, reject: 'url' });
   r({ id: 'reject-v2-base-not-url', title: 'A base that is not a URL (as in v1)', input: { base: 'caddie.example' }, reject: 'url' });
+  r({ id: 'reject-v2-base-ipv4-hex', title: 'A hexadecimal shorthand IPv4, which the URL parser would read as 127.0.0.1', input: { base: 'http://0x7f.1:8787' }, reject: 'url' });
   r({ id: 'reject-v2-path-double-slash', title: 'A path starting with "//" (as in v1)', input: { path: '//admin/stats' }, reject: 'path_charset' });
   r({ id: 'reject-v2-query-percent', title: 'q=a%20b in the query (as in v1)', input: { path: `/admin/people/search?event=${EVENT}&q=a%20b` }, reject: 'query_charset' });
   r({ id: 'reject-v2-get-with-body', title: 'A GET with a body (as in v1)', input: { body: '{}' }, reject: 'body_on_bodyless_method' });
@@ -343,6 +349,8 @@ export function buildFixture() {
   entry('reject-verify-origins-empty-entry', 'An empty entry (ADMIN_ORIGIN with a trailing comma)', '');
   entry('reject-verify-origins-no-scheme', 'An entry without a scheme', 'caddie.example');
   entry('reject-verify-origins-path', 'An entry with a path', 'https://caddie.example/admin');
+  entry('reject-verify-origins-ipv6-long', 'An entry with an IPv6 address written in full', 'http://[0:0:0:0:0:0:0:1]:8787');
+  entry('reject-verify-origins-ipv4-integer', 'An entry with an IPv4 address as one integer', 'https://2130706433');
   entry('reject-verify-origins-query', 'An entry with a query', 'https://caddie.example/?x=1');
   entry('reject-verify-origins-ftp', 'An entry that is neither http: nor https:', 'ftp://caddie.example');
   entry('reject-verify-origins-file', 'A file: entry, whose origin is the opaque "null"', 'file:///');
@@ -376,8 +384,22 @@ export function buildFixture() {
   o('origin-surrounding-tab-newline', 'A surrounding tab and newline are trimmed too', '\thttps://caddie.example\n', PROD);
   o('origin-workers-dev', 'A workers.dev hostname', WORKERS_DEV, WORKERS_DEV);
   o('origin-loopback', 'A loopback with a port', 'http://127.0.0.1:8787', 'http://127.0.0.1:8787');
-  o('origin-ipv4-hex', 'A hexadecimal IPv4 part is normalised', 'https://0x7f.0.0.1', 'https://127.0.0.1');
-  o('origin-ipv6-long', 'An IPv6 address is compressed', 'http://[0:0:0:0:0:0:0:1]:8787', 'http://[::1]:8787');
+  // The parser rewrites numeric IPv4 forms and IPv6 addresses into a canonical host. A value whose
+  // host the parser changed (beyond lower case) is refused, as any other value the parser would
+  // turn into another host; a canonical dotted quad and a canonical IPv6 address stay.
+  o('origin-refused-ipv4-hex', 'A hexadecimal IPv4 part (the parser would read 127.0.0.1)', 'https://0x7f.0.0.1', null);
+  o('origin-refused-ipv4-hex-short', 'A hexadecimal shorthand IPv4 with a port (the parser would read 127.0.0.1:8787)', 'http://0x7f.1:8787', null);
+  o('origin-refused-ipv4-integer', 'An IPv4 address as one integer (the parser would read 127.0.0.1)', 'https://2130706433', null);
+  o('origin-refused-ipv4-octal', 'An octal IPv4 part (the parser would read 127.0.0.1)', 'http://0177.0.0.1', null);
+  o('origin-refused-ipv4-leading-zeros', 'Leading zeros in an IPv4 part (the parser would read 127.0.0.1)', 'http://127.000.0.1', null);
+  o('origin-refused-ipv4-shorthand', 'A shorthand IPv4 (the parser would read 127.0.0.1)', 'http://127.1', null);
+  o('origin-refused-ipv4-trailing-dot', 'A dotted quad with a trailing dot (the parser would drop the dot)', 'https://192.168.1.10.', null);
+  o('origin-refused-ipv6-long', 'An IPv6 address written in full (the parser would compress it)', 'http://[0:0:0:0:0:0:0:1]:8787', null);
+  o('origin-refused-ipv6-mapped-dotted', 'An IPv4-mapped IPv6 address with a dotted quad (the parser would write it in hex)', 'http://[::ffff:127.0.0.1]', null);
+  o('origin-refused-port-leading-zero', 'A port with a leading zero (the parser would drop the zero)', 'http://127.0.0.1:08787', null);
+  o('origin-ipv4-dotted-quad', 'A canonical dotted quad is kept', 'https://192.168.1.10', 'https://192.168.1.10');
+  o('origin-ipv6-loopback', 'The canonical IPv6 loopback with a port is kept', 'http://[::1]:8787', 'http://[::1]:8787');
+  o('origin-ipv6-uppercase', 'A canonical IPv6 address in upper case is lowercased', 'http://[::FFFF:7F00:1]:8787', 'http://[::ffff:7f00:1]:8787');
   o('origin-punycode', 'A punycode host is kept as it is', 'https://xn--bcher-kva.example', 'https://xn--bcher-kva.example');
   o('origin-punycode-uppercase', 'A punycode host in upper case is lowercased', 'https://XN--BCHER-KVA.example', 'https://xn--bcher-kva.example');
   o('origin-trailing-dot', 'A trailing dot stays: it is another origin string', 'https://caddie.example.', 'https://caddie.example.');
@@ -437,7 +459,7 @@ export function buildFixture() {
     canonical_format: 'caddie-admin-v2\\n<METHOD>\\n<pathname + search>\\n<bodySha256>\\n<ts>\\n<nonce>\\n<origin>\\n',
     v1_header_re: HEADER_RE_V1_SRC,
     v1_canonical_format: 'caddie-admin-v1\\n<METHOD>\\n<pathname + search>\\n<bodySha256>\\n<ts>\\n<nonce>\\n',
-    origin_rule: 'x is a string; t = x.trim() (String.prototype.trim); t matches ^[\\x21-\\x7e]+$ (printable ASCII) and ^https?:// (case-insensitive), holds no "@", "\\", "%" or "," (origin_forbidden_re), and matches origin_allow_re (case-insensitive; it implies the three checks before it); new URL(t) has protocol http: or https:, pathname "/", and empty search, hash, username and password; the result is new URL(t).origin. Anything else is refused.',
+    origin_rule: 'x is a string; t = x.trim() (String.prototype.trim); t matches ^[\\x21-\\x7e]+$ (printable ASCII) and ^https?:// (case-insensitive), holds no "@", "\\", "%" or "," (origin_forbidden_re), and matches origin_allow_re (case-insensitive; it implies the three checks before it); new URL(t) has protocol http: or https:, pathname "/", and empty search, hash, username and password; its hostname is the typed host in lower case and its port the typed port with the default port of the scheme (or an empty port) dropped, so a host the parser rewrites (a numeric IPv4 form other than a canonical dotted quad, an IPv6 address not in its canonical compressed form, a port with a leading zero) is refused; the result is new URL(t).origin. Anything else is refused.',
     origin_chars_re: '^[\\x21-\\x7e]+$',
     origin_prefix_re: '^https?:\\/\\/',
     origin_forbidden_re: '[@\\\\%,]',
@@ -495,6 +517,12 @@ function workerConfigCases() {
   origin('admin-origin-duplicates', 'Two spellings of one origin: listed once', `${PROD},https://CADDIE.example/`);
   origin('admin-origin-percent', 'An entry with "%": invalid', `${PROD},https://caddie%2Eexample`);
   origin('admin-origin-path', 'An entry with a path: invalid', `${PROD}/admin`);
+  origin('admin-origin-ipv4-integer', 'An IPv4 address as one integer, which the parser would rewrite: invalid', `${PROD},https://2130706433`);
+  origin('admin-origin-ipv4-hex', 'A hexadecimal shorthand IPv4 with a port: invalid', 'http://0x7f.1:8787');
+  origin('admin-origin-ipv4-octal', 'An octal IPv4 part: invalid', 'http://0177.0.0.1:8787');
+  origin('admin-origin-ipv6-long', 'An IPv6 address written in full: invalid', 'http://[0:0:0:0:0:0:0:1]:8787');
+  origin('admin-origin-loopbacks', 'A canonical dotted quad and the canonical IPv6 loopback, each with a port', 'http://127.0.0.1:8787,http://[::1]:8787');
+  origin('admin-origin-dotted-quad', 'A canonical private dotted quad', 'https://192.168.1.10');
   const sigMin = (id, title, raw) => out.push({ id, setting: 'ADMIN_SIG_MIN', title, ...(raw === undefined ? { unset: true } : { raw }), expect: { allowed_versions: sigMinOf(raw) } });
   sigMin('sig-min-unset', 'Unset: v1 and v2', undefined);
   sigMin('sig-min-1', '"1": v1 and v2', '1');
