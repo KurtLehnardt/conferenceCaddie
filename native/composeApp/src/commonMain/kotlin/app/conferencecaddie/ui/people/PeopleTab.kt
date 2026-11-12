@@ -37,6 +37,7 @@ import app.conferencecaddie.shared.people.PeopleUiState
 import app.conferencecaddie.ui.ShellRequest
 import app.conferencecaddie.ui.components.CaddieButton
 import app.conferencecaddie.ui.components.CaddieIconButton
+import app.conferencecaddie.ui.components.LocalNarrowLayout
 import app.conferencecaddie.ui.components.LucideImage
 import app.conferencecaddie.ui.components.NeedsConnection
 import app.conferencecaddie.ui.icons.LucideIcon
@@ -116,9 +117,22 @@ fun RequestsButton(count: Int, onClick: () -> Unit, modifier: Modifier = Modifie
     CaddieIconButton(LucideIcon.Inbox, Strings.AppBar.requests(count), onClick, modifier.testTag("requests-button"), badge = count)
 }
 
-/** The People tab while the people records could not be opened: a message and "Try again", which asks the controller to open them now. */
+/**
+ * The Profile button of the People tab's app bar, between Requests and the gear (web
+ * people/profileEntry.ts): the user-round icon of Settings' Profile row, named "Profile". It opens
+ * Profile at any time, not only while "Create my profile" shows.
+ */
 @Composable
-private fun PeopleSessionFailed(host: PeopleHost) {
+fun ProfileButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    CaddieIconButton(LucideIcon.UserRound, Strings.AppBar.PROFILE, onClick, modifier.testTag("profile-button"))
+}
+
+/**
+ * The People tab and Profile while the people records could not be opened: a message and "Try
+ * again", which asks the controller to open them now.
+ */
+@Composable
+internal fun PeopleSessionFailed(host: PeopleHost) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp).testTag("people-session-failed"),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -184,6 +198,9 @@ class PeopleUi internal constructor(
         tabsKnown = base.tabsKnown && (state.sessionFailed || !(base.capabilities.people.enabled && state.availability == PeopleAvailability.Loading)),
         peopleBadge = badge,
         profileName = state.profile.displayName,
+        // Settings' Profile row says why Profile cannot be edited now; it still opens Profile, which
+        // offers "Try again" as the People tab does.
+        profileNote = PeopleCommonStrings.SESSION_FAILED.takeIf { state.sessionFailed },
     )
 
     /** TabContent.people. */
@@ -195,7 +212,7 @@ class PeopleUi internal constructor(
     /** TabContent.settingsPeople: the people groups, once a conference is ready. */
     val settings: @Composable ColumnScope.() -> Unit get() = slots.settings
 
-    /** TabContent.appBarActions: Requests on the People tab. */
+    /** TabContent.appBarActions: Requests (not offline in a narrow window) and Profile on the People tab. */
     val appBarActions: @Composable (Tab) -> Unit get() = slots.appBarActions
 
     /**
@@ -264,7 +281,13 @@ internal class PeopleSlots(private val host: PeopleHost) {
     val appBarActions: @Composable (Tab) -> Unit = { tab ->
         val i = inputs()
         if (tab == Tab.People && i.state.features.enabled && i.searchable) {
-            RequestsButton(if (i.state.features.enabled) i.state.inbox.count else 0, host::openInbox)
+            // In a narrow window while offline, Requests steps aside for the Offline badge, as on the
+            // web: it opens only "needs a connection" then, while Profile works offline, and the
+            // count still shows on the People tab.
+            if (i.online || !LocalNarrowLayout.current) {
+                RequestsButton(if (i.state.features.enabled) i.state.inbox.count else 0, host::openInbox)
+            }
+            ProfileButton(host::openProfile)
         }
     }
 

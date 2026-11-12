@@ -152,6 +152,12 @@ data class CaddieDimens(
     val contentMaxWidth: Dp = 720.dp,
     /** The window width from which the wide layout applies (@media (min-width: 768px)). */
     val wideLayoutMinWidth: Dp = 768.dp,
+    /**
+     * Below this window width the app bar is narrow (@media (max-width: 359px)): offline, the People
+     * tab's Requests steps aside so the Offline badge, Profile and the gear leave the conference name
+     * room.
+     */
+    val narrowAppBarMaxWidth: Dp = 360.dp,
 )
 
 /**

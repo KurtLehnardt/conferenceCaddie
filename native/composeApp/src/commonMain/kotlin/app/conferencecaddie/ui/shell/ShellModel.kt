@@ -68,6 +68,11 @@ data class ShellState(
     val peopleBadge: Int = 0,
     /** The name on this device's people profile, shown under Profile in Settings; blank says "Set up your profile". */
     val profileName: String = "",
+    /**
+     * Why Profile cannot be edited now (the people records could not be opened), shown under Profile
+     * in Settings in place of [profileName]. The row still opens Profile, which offers "Try again".
+     */
+    val profileNote: String? = null,
     val theme: ThemePreference = ThemePreference.System,
     /** Bytes of saved schedules on this device; null hides the Storage group. */
     val savedSchedulesBytes: Long? = null,
@@ -141,10 +146,15 @@ sealed interface ShellPage {
 
 /**
  * The people screens over the tabs. Requests and Meet up keep People selected in the tab bar, as
- * on the web; Profile and Settings select no tab. The caller draws them ([TabContent.peoplePage]).
+ * on the web; Profile selects the tab its Back leads to, if any, and Settings none. The caller draws
+ * them ([TabContent.peoplePage]).
  */
 sealed interface PeoplePage : ShellPage {
-    /** Profile (#/profile). Its Back is the labelled "‹ Settings", which leads to Settings. */
+    /**
+     * Profile (#/profile). Its Back is labelled with the tab it was opened over ("‹ People", "‹ For
+     * you", "‹ Search" or "‹ Interested") and returns there ([ShellNavigation.profileBackTab]), which
+     * the tab bar marks meanwhile; else it is "‹ Settings", which leads to Settings.
+     */
     data object Profile : PeoplePage
 
     /** Requests (#/inbox). */
@@ -161,7 +171,8 @@ sealed interface PeoplePage : ShellPage {
  * already open, goes back to it, so Settings → Profile → "‹ Settings" returns to the Settings
  * underneath); [back] leaves the top page, as the system Back and the iOS edge swipe do;
  * [selectTab] leaves every page and shows the tab. The app bar's own Back differs, as on the web:
- * Settings, Requests and Meet up lead straight to the tab screen, and Profile leads to Settings.
+ * Settings, Requests and Meet up lead straight to the tab screen, and Profile leads back to the tab
+ * it was opened from, or to Settings.
  */
 interface ShellNavigator {
     fun selectTab(tab: Tab)
@@ -208,8 +219,32 @@ class ShellNavigation(initialTab: Tab? = null) : ShellNavigator {
 
     var switcherOpen: Boolean by mutableStateOf(false)
 
+    /**
+     * The tab whose screen Profile was opened over (the People tab's Profile button, "Create my
+     * profile", a share control's or a toast's "Open profile" on another tab), or null when it was
+     * opened over another page, such as Settings, or the conference has changed since. Saved with
+     * the pages; [profileBackTab] reads it.
+     */
+    var profileFrom: Tab? by mutableStateOf(null)
+        private set
+
+    /**
+     * The tab whose screen the shell drew last, under any pages: [tab], or the first tab offered
+     * while none was asked for. [App] keeps it current, so a page opened over a tab screen knows
+     * which one it is even before the person picked a tab.
+     */
+    internal var shownTab: Tab? = null
+
     /** The page showing, or null on a tab screen. */
     val top: ShellPage? get() = pages.lastOrNull()
+
+    /**
+     * The tab Profile's app bar Back returns to and names, as the web's does (lib/route.ts
+     * `profileBack`): the one whose screen Profile shows straight over; null when its Back leads to
+     * Settings (opened from Settings or another page, or at another conference since).
+     */
+    val profileBackTab: Tab?
+        get() = profileFrom?.takeIf { pages == listOf(PeoplePage.Profile) }
 
     override fun selectTab(tab: Tab) {
         pages = emptyList()
@@ -224,6 +259,7 @@ class ShellNavigation(initialTab: Tab? = null) : ShellNavigator {
 
     override fun openPage(page: ShellPage) {
         val i = pages.indexOf(page)
+        if (i < 0 && page == PeoplePage.Profile) profileFrom = if (pages.isEmpty()) shownTab ?: tab else null
         pages = if (i >= 0) pages.take(i + 1) else pages + page
     }
 
@@ -232,11 +268,25 @@ class ShellNavigation(initialTab: Tab? = null) : ShellNavigator {
     }
 
     /**
-     * The app bar's Back (web app.tsx `backTo`): Profile leads to Settings (back to the one
-     * underneath, or a new one on top, as the web's link does); every other page leads to the tab.
+     * The app bar's Back (web app.tsx `backTo`): Profile leads back to the tab it was opened over
+     * ([profileBackTab]), else to Settings (back to the one underneath, or a new one on top, as the
+     * web's link does); every other page leads to the tab.
      */
     fun appBarBack() {
-        if (top == PeoplePage.Profile) openPage(ShellPage.Settings) else pages = emptyList()
+        val backTab = profileBackTab
+        when {
+            top != PeoplePage.Profile -> pages = emptyList()
+            backTab != null -> selectTab(backTab)
+            else -> openPage(ShellPage.Settings)
+        }
+    }
+
+    /**
+     * Another conference was selected: Profile's Back no longer names the tab it was opened over,
+     * which showed the other conference, and leads to Settings, as the web's does.
+     */
+    fun conferenceChanged() {
+        profileFrom = null
     }
 
     /** Closes the pages [which] selects, wherever they are in the stack. */
@@ -260,13 +310,16 @@ class ShellNavigation(initialTab: Tab? = null) : ShellNavigator {
             else -> null
         }
 
-        /** Saves the tab, the switcher and the pages as strings, which every platform can keep. */
+        private fun tabNamed(name: String): Tab? = Tab.entries.firstOrNull { it.name == name }
+
+        /** Saves the tab, the switcher, where Profile was opened from and the pages as strings, which every platform can keep. */
         val Saver: Saver<ShellNavigation, Any> = listSaver(
-            save = { nav -> listOf(nav.tab?.name ?: "", nav.switcherOpen.toString()) + nav.pages.map(::encode) },
+            save = { nav -> listOf(nav.tab?.name ?: "", nav.switcherOpen.toString(), nav.profileFrom?.name ?: "") + nav.pages.map(::encode) },
             restore = { saved ->
-                ShellNavigation(Tab.entries.firstOrNull { it.name == saved[0] }).apply {
+                ShellNavigation(tabNamed(saved[0])).apply {
                     switcherOpen = saved[1] == "true"
-                    pages = saved.drop(2).mapNotNull(::decode)
+                    profileFrom = tabNamed(saved[2])
+                    pages = saved.drop(3).mapNotNull(::decode)
                 }
             },
         )

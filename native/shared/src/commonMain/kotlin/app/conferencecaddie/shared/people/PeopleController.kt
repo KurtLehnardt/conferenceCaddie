@@ -215,20 +215,27 @@ class PeopleController(
 
     /**
      * Changes the profile on the device and, after a one-second pause, sends it to every conference
-     * that holds it (the selected one first). Fields are cut to the server's caps.
+     * that holds it (the selected one first). Fields are cut to the server's caps. Returns null once
+     * the change is on the device, or the web's message when it is not: the records are not open
+     * (still loading, or they could not be read or written) or this server offers no people features.
      */
-    suspend fun updateProfile(transform: (Profile) -> Profile): Unit = write(Unit) { editProfile(transform) }
+    suspend fun updateProfile(transform: (Profile) -> Profile): String? = write(FAILED_MESSAGE) { editProfile(transform) }
 
-    private suspend fun editProfile(transform: (Profile) -> Profile) {
-        val s = enabledSession() ?: return
+    private suspend fun editProfile(transform: (Profile) -> Profile): String? {
+        val s = enabledSession() ?: return noSessionMessage()
         s.store.setProfile(transform(s.store.profile ?: Profile.EMPTY).sanitized())
         s.sync.scheduleProfileSync(context?.conference?.slug)
         publish()
+        return null
     }
 
-    /** Sets the selected conference's learn and speak topics (at most 30 each) and saves the profile. */
-    suspend fun setTopics(learn: List<TopicRef>, speak: List<TopicRef>): Unit = write(Unit) {
-        val slug = context?.conference?.slug ?: return@write
+    /**
+     * Sets the selected conference's learn and speak topics (at most 30 each) and saves the profile.
+     * Returns null once they are on the device, or the message as [updateProfile] does; without a
+     * selected conference there is nothing to set them for, and the message says they were not saved.
+     */
+    suspend fun setTopics(learn: List<TopicRef>, speak: List<TopicRef>): String? = write(FAILED_MESSAGE) {
+        val slug = context?.conference?.slug ?: return@write FAILED_MESSAGE
         editProfile { it.copy(topics = it.topics + (slug to ConferenceTopics(learn.take(30), speak.take(30)))) }
     }
 
@@ -1062,6 +1069,14 @@ class PeopleController(
         val ctx = context ?: return null
         return session?.takeIf { featuresOf(ctx).enabled }
     }
+
+    /**
+     * Why [enabledSession] is null, for an action that returns a message: this server offers no
+     * people features, or its records are not open (the capabilities are still loading, or the
+     * records could not be read), so nothing was kept.
+     */
+    private fun noSessionMessage(): String =
+        if (context?.let { featuresOf(it).enabled } == false) PeopleError.NOT_OFFERED_MESSAGE else FAILED_MESSAGE
 
     private fun backendAllowed(backend: BackendUrl.Valid): Boolean = allowLocalHttp || backend.base.startsWith("https://")
 

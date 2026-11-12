@@ -94,8 +94,9 @@ fun AppBarBack(onClick: () -> Unit, modifier: Modifier = Modifier) {
 }
 
 /**
- * .appbar-back-labeled: Profile's Back, a chevron and [label] ("Settings") in the accent ink at
- * 17 sp, named [contentDescription] ("Back to Settings") for screen readers.
+ * .appbar-back-labeled: Profile's Back, a chevron and [label] ("Settings", or the name of the tab
+ * Profile was opened from) in the accent ink at 17 sp, named [contentDescription] ("Back to
+ * Settings") for screen readers.
  */
 @Composable
 fun AppBarLabeledBack(label: String, contentDescription: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
@@ -168,6 +169,9 @@ fun SwitcherButton(name: String, onClick: () -> Unit, modifier: Modifier = Modif
  * components can follow the web's wide rules, such as chip rows that wrap instead of scrolling.
  */
 val LocalWideLayout = staticCompositionLocalOf { false }
+
+/** True in a window narrower than 360 dp (CaddieDimens.narrowAppBarMaxWidth), where the app bar has the least room. */
+val LocalNarrowLayout = staticCompositionLocalOf { false }
 
 /** One destination of the tab bar. */
 data class NavItem<T>(val id: T, val label: String, val icon: LucideIcon, val badge: Int = 0, val accessibilityLabel: String? = null)

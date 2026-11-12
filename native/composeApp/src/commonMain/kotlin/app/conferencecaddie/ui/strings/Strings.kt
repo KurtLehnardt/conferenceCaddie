@@ -26,10 +26,17 @@ object Strings {
     object AppBar {
         const val SETTINGS = "Settings"
         const val BACK = "Back"
-        /** Profile's labelled Back: the visible word and the button's name. */
+        /**
+         * Profile's labelled Back, the visible word and the button's name: Settings, or the name of
+         * the tab it was opened from ([Tabs], web lib/route.ts `profileBack`) as "Back to {tab}".
+         */
         const val BACK_SETTINGS_LABEL = "Settings"
         const val BACK_TO_SETTINGS = "Back to Settings"
-        /** The titles of the people screens over the tabs (#/profile, #/inbox, #/meet/{id}). */
+        fun backTo(screen: String) = "Back to $screen"
+        /**
+         * The titles of the people screens over the tabs (#/profile, #/inbox, #/meet/{id}). [PROFILE]
+         * is also the name of the People tab's Profile button (web people/profileEntry.ts).
+         */
         const val PROFILE = "Profile"
         const val REQUESTS = "Requests"
         const val MEET_UP = "Meet up"

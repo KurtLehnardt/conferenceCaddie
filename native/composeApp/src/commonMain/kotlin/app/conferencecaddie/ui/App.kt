@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import app.conferencecaddie.shared.AppLink
+import app.conferencecaddie.ui.components.LocalNarrowLayout
 import app.conferencecaddie.ui.components.LocalWideLayout
 import app.conferencecaddie.ui.components.NavRail
 import androidx.compose.foundation.layout.Column
@@ -34,6 +35,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -135,6 +137,8 @@ fun App(
     val selected = picked ?: tabs.first()
     val tabSelected = picked ?: tabs.first().takeIf { state.tabsKnown }
     val page = navigation.top
+    // A page opened over a tab screen remembers which one it was (Profile's Back names it).
+    SideEffect { navigation.shownTab = selected }
     // The tab bar keeps its place but draws no tab until it is known whether People is among them
     // (on a first start, and while the people controller opens its records), or until TABS_WAIT_MS
     // has passed, so no tab moves once the person can see it.
@@ -161,6 +165,7 @@ fun App(
         val shown = shownConference
         if (shown != null && shown != selected) {
             navigation.closePages { it == PeoplePage.Inbox || it is PeoplePage.Meet }
+            navigation.conferenceChanged()
         }
         shownConference = selected
     }
@@ -190,10 +195,12 @@ fun App(
             BoxWithConstraints(Modifier.fillMaxSize().background(Caddie.colors.bg)) {
                 val wide = maxWidth >= Caddie.dimens.wideLayoutMinWidth
                 val navItems = if (tabsShown) tabs.map { tab -> navItem(tab, state) } else emptyList()
-                // Requests and Meet up belong to People, as on the web; Settings and Profile to no tab.
+                // Requests and Meet up belong to People, as on the web; Profile to the tab its Back
+                // names, if any; Settings to no tab.
                 val navSelected = when (page) {
                     null -> tabSelected
                     PeoplePage.Inbox, is PeoplePage.Meet -> Tab.People.takeIf { it in tabs }
+                    PeoplePage.Profile -> navigation.profileBackTab?.takeIf { it in tabs }
                     else -> null
                 }
                 val onNavSelect: (Tab) -> Unit = navigation::selectTab
@@ -201,7 +208,7 @@ fun App(
                 var navBarHeight by remember { mutableStateOf(0.dp) }
                 val density = LocalDensity.current
                 // One tree for both layouts, so a screen keeps its state when the window changes width.
-                CompositionLocalProvider(LocalWideLayout provides wide) {
+                CompositionLocalProvider(LocalWideLayout provides wide, LocalNarrowLayout provides (maxWidth < Caddie.dimens.narrowAppBarMaxWidth)) {
                     Row(Modifier.fillMaxSize()) {
                         if (wide) NavRail(navItems, navSelected, onNavSelect)
                         Column(
@@ -365,7 +372,12 @@ private fun ShellAppBar(
             null -> null
             PeoplePage.Profile -> {
                 {
-                    AppBarLabeledBack(Strings.AppBar.BACK_SETTINGS_LABEL, Strings.AppBar.BACK_TO_SETTINGS, navigation::appBarBack)
+                    val back = navigation.profileBackTab
+                    if (back != null) {
+                        AppBarLabeledBack(tabName(back), Strings.AppBar.backTo(tabName(back)), navigation::appBarBack)
+                    } else {
+                        AppBarLabeledBack(Strings.AppBar.BACK_SETTINGS_LABEL, Strings.AppBar.BACK_TO_SETTINGS, navigation::appBarBack)
+                    }
                 }
             }
             else -> {
@@ -398,15 +410,23 @@ private fun pageTag(page: PeoplePage): String = when (page) {
     is PeoplePage.Meet -> "meet"
 }
 
+/** A tab's name in the tab bar, which Profile's Back also says. */
+private fun tabName(tab: Tab): String = when (tab) {
+    Tab.People -> Strings.Tabs.PEOPLE
+    Tab.ForYou -> Strings.Tabs.FOR_YOU
+    Tab.Search -> Strings.Tabs.SEARCH
+    Tab.Interested -> Strings.Tabs.INTERESTED
+}
+
 private fun navItem(tab: Tab, state: ShellState): NavItem<Tab> = when (tab) {
     Tab.People -> NavItem(
-        tab, Strings.Tabs.PEOPLE, LucideIcon.Users, state.peopleBadge,
+        tab, tabName(tab), LucideIcon.Users, state.peopleBadge,
         if (state.peopleBadge > 0) Strings.Tabs.peopleWithCount(state.peopleBadge) else null,
     )
-    Tab.ForYou -> NavItem(tab, Strings.Tabs.FOR_YOU, LucideIcon.Sparkles)
-    Tab.Search -> NavItem(tab, Strings.Tabs.SEARCH, LucideIcon.Search)
+    Tab.ForYou -> NavItem(tab, tabName(tab), LucideIcon.Sparkles)
+    Tab.Search -> NavItem(tab, tabName(tab), LucideIcon.Search)
     Tab.Interested -> NavItem(
-        tab, Strings.Tabs.INTERESTED, LucideIcon.Star, state.interestedCount,
+        tab, tabName(tab), LucideIcon.Star, state.interestedCount,
         if (state.interestedCount > 0) Strings.Tabs.interestedWithCount(state.interestedCount) else null,
     )
 }

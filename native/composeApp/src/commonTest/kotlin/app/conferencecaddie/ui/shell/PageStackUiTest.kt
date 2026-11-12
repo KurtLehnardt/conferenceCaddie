@@ -90,12 +90,27 @@ class PageStackUiTest {
         onNodeWithTag("people-home").assertExists()
         onNodeWithTag("tab-People").assertIsSelected()
 
-        // Opened from the People tab, Profile's Back still leads to Settings, and the system Back
-        // from there returns to Profile, as the browser's Back does on the web.
+        // Opened from the People tab, Profile's Back says People and returns there; the tab bar marks
+        // People meanwhile.
         runOnIdle { nav.openPage(PeoplePage.Profile) }
         onNodeWithTag("page-profile").assertExists()
+        onNodeWithTag("tab-People").assertIsSelected()
+        onNodeWithContentDescription(Strings.AppBar.BACK_TO_SETTINGS).assertDoesNotExist()
+        onNodeWithContentDescription(Strings.AppBar.backTo(Strings.Tabs.PEOPLE)).performClick()
+        onNodeWithTag("page-profile").assertDoesNotExist()
+        onNodeWithTag("people-home").assertExists()
+        onNodeWithTag("tab-People").assertIsSelected()
+        assertEquals(emptyList(), nav.pages)
+
+        // Opened over Requests, its Back still leads to Settings and no tab is marked, and the
+        // system Back from there returns to Profile, as the browser's Back does on the web.
+        onNodeWithTag("requests-button").performClick()
+        runOnIdle { nav.openPage(PeoplePage.Profile) }
+        onNodeWithTag("page-profile").assertExists()
+        onNodeWithTag("tab-People").assertIsNotSelected()
         onNodeWithContentDescription(Strings.AppBar.BACK_TO_SETTINGS).performClick()
         onNodeWithTag("settings-screen").assertExists()
+        assertEquals(listOf(PeoplePage.Inbox, PeoplePage.Profile, ShellPage.Settings), nav.pages)
         runOnIdle { nav.back() }
         onNodeWithTag("page-profile").assertExists()
     }

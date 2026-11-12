@@ -119,6 +119,45 @@ class PeopleControllerTest {
     }
 
     @Test
+    fun aProfileEditThatCannotBeKeptReturnsTheMessageInsteadOfVanishing() = runTest {
+        val h = PeopleHarness(this)
+        val kv = FlakyKeyValue().apply { failReads = true }
+        val c = controllerOver(kv, h)
+        val ebpf = listOf(TopicRef("ebpf", "eBPF"))
+
+        // No context yet (the capabilities are loading): nothing to keep the edit in.
+        assertEquals(ProfileSync.GENERIC_MESSAGE, c.updateProfile { it.copy(displayName = "Caddie Native Test A") })
+
+        // The records cannot be opened: the edit and the topics say they were not saved.
+        c.updateContext(h.context())
+        runCurrent()
+        assertTrue(c.state.value.sessionFailed)
+        assertEquals(ProfileSync.GENERIC_MESSAGE, c.updateProfile { it.copy(displayName = "Caddie Native Test A") })
+        assertEquals(ProfileSync.GENERIC_MESSAGE, c.setTopics(ebpf, emptyList()))
+        assertEquals("", c.state.value.profile.displayName)
+
+        // Once they open, both are kept and say nothing.
+        kv.failReads = false
+        assertTrue(c.retrySession())
+        assertNull(c.updateProfile { it.copy(displayName = "Caddie Native Test A") })
+        assertNull(c.setTopics(ebpf, emptyList()))
+        assertEquals("Caddie Native Test A", c.state.value.profile.displayName)
+        assertEquals(ebpf, c.state.value.topics.learn)
+
+        // Records that cannot be written: the generic line, not an exception and not silence.
+        kv.failWrites = true
+        assertEquals(ProfileSync.GENERIC_MESSAGE, c.updateProfile { it.copy(about = "Not kept.") })
+        kv.failWrites = false
+
+        // A backend without people features: the web's "does not offer that".
+        c.updateContext(h.context(PEOPLE_ON.copy(people = PEOPLE_ON.people.copy(enabled = false))))
+        runCurrent()
+        assertEquals(PeopleAvailability.Off, c.state.value.availability)
+        assertEquals(PeopleError.NOT_OFFERED_MESSAGE, c.updateProfile { it.copy(displayName = "Someone Else") })
+        c.close()
+    }
+
+    @Test
     fun aSessionIsOpenedOnceWhileItsRecordsAreStillBeingRead() = runTest {
         val h = PeopleHarness(this)
         val gate = CompletableDeferred<Unit>()
