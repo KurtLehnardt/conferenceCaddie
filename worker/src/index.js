@@ -446,6 +446,11 @@ async function handleAdmin(request, env, url, header) {
   }
 
   if (!CONFERENCE_ADMIN_PATHS.has(path)) throw reply(404, { error: 'Not found' });
+  // The smoke's fixtures (/admin/test/*) are served only when the Worker variable ADMIN_TEST_ROUTES
+  // is the string "1" (worker/scripts/dev-vars.mjs sets it for a local run; wrangler.toml does not).
+  // Otherwise they answer 404 like an unknown path, here: after the signature, the clock and the
+  // body hash have been checked, and before the event is looked up in the directory.
+  if (path.startsWith('/admin/test/') && env.ADMIN_TEST_ROUTES !== '1') throw reply(404, { error: 'Not found' });
   const slug = url.searchParams.get('event');
   if (typeof slug !== 'string' || !SLUG_RE.test(slug)) throw reply(400, { error: 'event must be a conference slug' });
   // Any conference the directory knows: the operator's moderation, stats and test routes must reach

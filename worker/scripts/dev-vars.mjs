@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // Writes worker/.dev.vars (git-ignored) with development-only values for `wrangler dev`:
-// a random ADMIN_TOKEN and REF_SALT, a fresh VAPID P-256 pair, and EMBED_FAKE=1 unless
-// --real-ai is given. An existing file is kept unless --force is given, so the admin token stays
-// stable between runs. The file is created with mode 0600. Only names are printed, never values.
+// a random ADMIN_TOKEN and REF_SALT, a fresh VAPID P-256 pair, ADMIN_TEST_ROUTES=1 (the
+// /admin/test/* fixtures of the local smoke, which a deployed Worker serves only when the variable
+// is "1"), and EMBED_FAKE=1 unless --real-ai is given. An existing file is kept unless --force is
+// given, so the admin token stays stable between runs; names it lacks are added. The file is
+// created with mode 0600. Only names are printed, never values.
 //
 // Usage: node scripts/dev-vars.mjs [--force] [--real-ai] [--ble] [--set NAME=VALUE ...]
 //   --ble adds a development-only Bluetooth master keyring (BLE_MASTER_KEYRING, one random
@@ -71,6 +73,12 @@ if (realAi) {
     vars.set('EMBED_FAKE', '1');
     created.push('EMBED_FAKE');
   }
+}
+// The /admin/test/* fixtures the local smoke needs. A deployed Worker serves them only when this
+// variable is "1", and wrangler.toml does not set it, so they are off there.
+if (!vars.has('ADMIN_TEST_ROUTES')) {
+  vars.set('ADMIN_TEST_ROUTES', '1');
+  created.push('ADMIN_TEST_ROUTES');
 }
 if (ble && !vars.has('BLE_MASTER_KEYRING')) {
   vars.set('BLE_MASTER_KEYRING', JSON.stringify({ current: 'dev', keys: { dev: b64url(crypto.getRandomValues(new Uint8Array(32))) } }));
