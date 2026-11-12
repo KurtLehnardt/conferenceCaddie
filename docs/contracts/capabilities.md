@@ -38,7 +38,7 @@ The response is `application/json` and public. Backends should send `Cache-Contr
 | `people.enabled` | boolean | The People API v1 ([people-api.md](people-api.md)) is served. False hides the People tab. |
 | `people.semantic` | `server`, `client` or `off` | Where meaning-based people matching runs. `client` is reserved for tier 2, where the app computes profile vectors; the request field that carries them is not part of People API v1 and will be added as an optional field. A client that does not implement `client` treats it as `off` (keyword and topic legs only). |
 | `people.presence` | boolean | `PUT` and `DELETE /api/presence`, the "around now" view and the watch list. |
-| `people.presence_keep_until` | boolean, optional | `PUT /api/presence` takes `until: "keep"`, which keeps the stored `presence_until` instead of starting the hour or the day again ([people-api.md](people-api.md), Keeping the end of presence). Only when this is true, and only while presence is already on, a client sends `keep` with every write except an explicit turn-on or restart: Bluetooth writes, re-keys, position fixes and turning the position off. Turning presence on, and restarting it, send `hour` or `day`. Missing is false; tier 3 sends true, tier 2 does not send it yet. |
+| `people.presence_keep_until` | boolean, optional | `PUT /api/presence` takes `until: "keep"`, which keeps the stored `presence_until` instead of starting the hour or the day again ([people-api.md](people-api.md), Keeping the end of presence). Only when this is true, and only while presence is already on, a client sends `keep` with every write except an explicit turn-on or restart: Bluetooth writes, re-keys, position fixes and turning the position off. Turning presence on, and restarting it, send `hour` or `day`. Missing is false; tier 3 and tier 2 send true. |
 | `people.gps_bands` | boolean | The optional position with presence, the proximity bands and the distance inside an active meet. |
 | `people.meets` | boolean | Ask to talk shop, Wave, the meet inbox and the meet screen. |
 | `people.circles` | boolean | Per-talk sharing, circle counts and circle members. |
@@ -99,7 +99,7 @@ The app keeps the last good document per backend base. It fetches again at every
 | File | What it is |
 |---|---|
 | `tier1-demo.json` | Tier 1: bundles, no people features, imports on the device. |
-| `tier2-free.json` | Tier 2: people features with client vectors and a WebSocket, `derived-v1` with a 300-second sightings interval, FCM push from the official backend, no `until: "keep"` yet. |
+| `tier2-free.json` | Tier 2: people features with client vectors and a WebSocket, `derived-v1` with a 300-second sightings interval, FCM push from the official backend, `until: "keep"`. |
 | `tier3-paid.json` | Tier 3 after Phase 4: server semantics, polling, `until: "keep"`, `derived-v1` with a 10-second interval, APNs and FCM from the official backend. |
 | `tier3-transition.json` | Tier 3 between Phase 1 and Phase 4: the same with `server-rotate` Bluetooth and no native push. |
 | `legacy-effective.json` | The effective feature set of a backend with no document. |

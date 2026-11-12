@@ -82,6 +82,7 @@ function server({ caps = TIER3, keep = () => null } = {}) {
 }
 const puts = () => calls.filter((c) => c.method === 'PUT' && c.path === '/api/presence');
 const withoutKeep = (doc) => ({ ...doc, people: Object.fromEntries(Object.entries(doc.people).filter(([k]) => k !== 'presence_keep_until')) });
+const keepFlag = (doc, value) => ({ ...doc, people: { ...doc.people, presence_keep_until: value } });
 
 /** The plugin reports that it stopped, as the 11-minute alarm ('stale') does. */
 async function stopped(reason) {
@@ -111,7 +112,7 @@ test('turning Bluetooth on, and the stale alarm clearing it, send keep where the
 });
 
 test('without the flag the Bluetooth writes send the mode, as before', async () => {
-  for (const [label, caps, mode, until] of [['no flag, day', withoutKeep(TIER3), 'day', 'day'], ['tier 2, hour', fixture('tier2-free.json'), 'hour', undefined]]) {
+  for (const [label, caps, mode, until] of [['no flag, day', withoutKeep(TIER3), 'day', 'day'], ['flag false, hour', keepFlag(fixture('tier2-free.json'), false), 'hour', undefined]]) {
     resetFake();
     plugin.calls.length = 0;
     device();

@@ -15,6 +15,7 @@
 //   /api/recommendations), so server_search is true.
 // - people: every People API v1 route. Profile vectors are computed by the Worker with Workers AI,
 //   with a keyword fallback, so semantic is "server". There is no WebSocket channel: live is "poll".
+//   PUT /api/presence takes until: 'keep' (connect/presence.js), so presence_keep_until is true.
 // - ble: derived-v1 with the master keyring, else server-rotate; the co-location rule and the caps
 //   apply in both. Sightings may come every 60 seconds.
 // - push: the Web Push routes are served (GET /api/push/vapid says whether keys are set); the
@@ -59,7 +60,7 @@ export function capabilitiesDocument(env) {
     api_version: 1,
     tier: 'free',
     talks: { bundle_base: bundleBaseFrom(env?.TALKS_BUNDLE_BASE), server_search: true },
-    people: { enabled: true, semantic: 'server', presence: true, gps_bands: true, meets: true, circles: true, reports: true, live: 'poll' },
+    people: { enabled: true, semantic: 'server', presence: true, presence_keep_until: true, gps_bands: true, meets: true, circles: true, reports: true, live: 'poll' },
     ble: {
       mode: ble.mode,
       service_uuid: SERVICE_UUID,
