@@ -9,6 +9,23 @@
 import { HttpError, bad, json, readJson, isPlainObject, REF_RE, MEET_ID_RE } from './lib/http.js';
 import { sha256Hex } from './lib/device.js';
 import { visibleUntilMs } from './lib/time.js';
+import { stripControls } from './lib/text.js';
+
+// A stored string as the operator's routes answer it: without control characters. Every write
+// strips them (lib/text.js), but rows written before that may still hold some, and an answer must
+// not carry them to a terminal. The CLI escapes what it prints as well; this is the Worker's layer.
+const clean = (v) => (typeof v === 'string' ? stripControls(v) : v);
+// Counts keyed by a stored string, cleaned; two keys that clean to the same text are added up.
+// Built in a Map and turned into own keys by fromEntries, so a key of any spelling (__proto__
+// included) stays a plain key.
+function countsBy(rows, key) {
+  const out = new Map();
+  for (const r of rows) {
+    const k = String(clean(r[key]));
+    out.set(k, (out.get(k) ?? 0) + Number(r.n));
+  }
+  return Object.fromEntries(out);
+}
 
 const MAX_TALKS = 50;
 const MAX_PEOPLE = 25;
@@ -322,18 +339,18 @@ async function postReports(ctx, req) {
 // Moderation (port of scripts/moderation.mjs). People appear by display_name and ref only.
 
 function reportSummary(ctx) {
-  const map = new Map();
+  const rows = new Map();
   for (const r of ctx.sql.exec('SELECT target_kind, target_id, reason, COUNT(*) AS n FROM reports GROUP BY target_kind, target_id, reason')) {
     const key = `${r.target_kind}:${r.target_id}`;
-    const e = map.get(key) ?? { reports: 0, reasons: {} };
-    e.reports += r.n;
-    e.reasons[r.reason] = r.n;
-    map.set(key, e);
+    if (!rows.has(key)) rows.set(key, []);
+    rows.get(key).push(r);
   }
+  const map = new Map();
+  for (const [key, list] of rows) map.set(key, { reports: list.reduce((n, r) => n + r.n, 0), reasons: countsBy(list, 'reason') });
   return map;
 }
 
-const nameOf = (ctx, id) => ctx.store.person(id)?.display_name ?? '(profile deleted)';
+const nameOf = (ctx, id) => clean(ctx.store.person(id)?.display_name) ?? '(profile deleted)';
 
 function meetView(ctx, m) {
   return { kind: 'meet', meet_id: m.meet_id, state: m.state, between: [nameOf(ctx, m.requester_id), nameOf(ctx, m.recipient_id)] };
@@ -347,8 +364,8 @@ function getModeration(ctx, req) {
   const people = [...ctx.sql.exec('SELECT profile_id FROM people WHERE hidden = 1 OR spot_hidden = 1')].map((r) => ctx.store.person(r.profile_id)).filter(Boolean);
   people.sort((a, c) => a.display_name.localeCompare(c.display_name));
   for (const p of people) {
-    if (p.hidden) hidden.push(withCounts(`profile:${p.ref}`, { kind: 'profile', display_name: p.display_name, ref: p.ref }));
-    if (p.spot_hidden) hidden.push(withCounts(`spot:${p.ref}`, { kind: 'spot', display_name: p.display_name, ref: p.ref }));
+    if (p.hidden) hidden.push(withCounts(`profile:${p.ref}`, { kind: 'profile', display_name: clean(p.display_name), ref: p.ref }));
+    if (p.spot_hidden) hidden.push(withCounts(`spot:${p.ref}`, { kind: 'spot', display_name: clean(p.display_name), ref: p.ref }));
   }
   for (const m of ctx.sql.exec('SELECT meet_id, state, requester_id, recipient_id FROM meets WHERE hidden = 1 ORDER BY created_at_ms DESC LIMIT ?', PAGE)) {
     hidden.push(withCounts(`meet:${m.meet_id}`, meetView(ctx, m)));
@@ -367,9 +384,9 @@ function getModeration(ctx, req) {
       target = m ? meetView(ctx, m) : { kind: 'meet', meet_id: r.target_id, deleted: true };
     } else {
       const p = ctx.store.personByRef(r.target_id);
-      target = { kind: r.target_kind, ref: r.target_id, display_name: p?.display_name ?? '(profile deleted)' };
+      target = { kind: r.target_kind, ref: r.target_id, display_name: clean(p?.display_name) ?? '(profile deleted)' };
     }
-    reports.push({ created_at: iso(r.created_at_ms), kind: r.target_kind, reason: r.reason, target });
+    reports.push({ created_at: iso(r.created_at_ms), kind: r.target_kind, reason: clean(r.reason), target });
   }
   return json(200, { hidden, reports });
 }
@@ -461,7 +478,7 @@ const flag = (v) => v === 1 || v === true;
 // One search row: the person's ref, name, flags and visibility end. Nothing else.
 const searchRow = (r) => ({
   ref: r.ref,
-  display_name: r.display_name,
+  display_name: clean(r.display_name),
   hidden: flag(r.hidden),
   spot_hidden: flag(r.spot_hidden),
   open_to_meet: flag(r.open_to_meet),
@@ -505,9 +522,11 @@ function searchPeople(ctx, req) {
   return json(200, { people: rows.map(searchRow), matched: Number(rows[0]?.matched ?? 0) });
 }
 
-// A text cut to at most 300 UTF-16 units, without leaving half of a surrogate pair; null stays null.
-function cut(value) {
-  if (typeof value !== 'string') return null;
+// A text without control characters, cut to at most 300 UTF-16 units without leaving half of a
+// surrogate pair; null stays null.
+function cut(raw) {
+  if (typeof raw !== 'string') return null;
+  const value = stripControls(raw);
   if (value.length <= VIEW_TEXT_MAX) return value;
   const end = /[\uD800-\uDBFF]/.test(value[VIEW_TEXT_MAX - 1]) ? VIEW_TEXT_MAX - 1 : VIEW_TEXT_MAX;
   return value.slice(0, end);
@@ -560,7 +579,7 @@ function viewPerson(ctx, req) {
   ).toArray();
   const person = {
     ref: p.ref,
-    display_name: p.display_name,
+    display_name: clean(p.display_name),
     hidden: p.hidden === true,
     spot_hidden: p.spot_hidden === true,
     open_to_meet: p.open_to_meet === true,
@@ -576,8 +595,7 @@ function viewPerson(ctx, req) {
       push: { web: countOf(ctx, 'SELECT COUNT(*) AS n FROM push_subs WHERE profile_id = ? AND expires_at_ms > ?', id, ctx.now) },
       reports: {
         total: reasons.reduce((sum, r) => sum + Number(r.n), 0),
-        // fromEntries makes own keys, so a stored reason of any spelling stays a plain key.
-        reasons: Object.fromEntries(reasons.map((r) => [String(r.reason), Number(r.n)])),
+        reasons: countsBy(reasons, 'reason'),
       },
     },
   };
@@ -595,7 +613,7 @@ function viewPerson(ctx, req) {
       pending: held && spot ? { spot: cut(spot) } : {},
     });
   }
-  if (fields.has('contact')) person.linkedin_url = p.linkedin_url ?? null;
+  if (fields.has('contact')) person.linkedin_url = clean(p.linkedin_url) ?? null;
   return json(200, { person });
 }
 

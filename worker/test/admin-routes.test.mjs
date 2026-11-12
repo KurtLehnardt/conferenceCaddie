@@ -852,6 +852,10 @@ describe('removal order, failures and the retired marker (review round 1)', { sk
     assert.equal(r.status, 503);
     assert.equal(r.headers.get('retry-after'), '60');
     assert.deepEqual({ ...r.json, deleted: r.json.deleted.people }, { error: 'removal_incomplete', step: 'directory', retired: true, wiped: true, deleted: 1, cause: 'daily_limit' });
+    // cause comes before the counts, so the first 200 characters (what adminClient reads to stop
+    // retrying at the daily limit) hold daily_limit.
+    assert.deepEqual(Object.keys(r.json), ['error', 'step', 'retired', 'wiped', 'cause', 'deleted']);
+    assert.match(JSON.stringify(r.json).slice(0, 200), /daily_limit/);
     assert.deepEqual([retiredOf(ctx), peopleIn(ctx), directoryRows(ctx)], [[SLUG], 0, [SLUG]]);
     // The directory still lists the slug, so admin requests reach the wiped object: a write is
     // refused there (a migration landing now would otherwise leave people no cron ever purges).
@@ -953,6 +957,167 @@ describe('removal order, failures and the retired marker (review round 1)', { sk
     const ctx = await setup();
     for (const q of ['evnt=x', 'foo=1', 'event2=x']) assert.equal((await send(ctx, 'GET', `/admin/stats?${q}`)).status, 400, q);
     ok(await send(ctx, 'GET', '/admin/stats'));
+  });
+});
+
+describe('review round 2', { skip }, () => {
+  const retiredOf = (ctx) => rows(ctx.db('directory:global'), 'SELECT slug FROM retired').map((x) => x.slug);
+  const directoryRows = (ctx) => rows(ctx.db('directory:global'), 'SELECT slug FROM conferences ORDER BY slug').map((r) => r.slug);
+  // A conference namespace whose next /internal/conference call fails, once, when armed.
+  function armedFanOut(ns) {
+    const arm = { on: false };
+    return {
+      arm,
+      ns: {
+        ...ns,
+        get: (id) => {
+          const stub = ns.get(id);
+          return {
+            fetch: async (url, init) => {
+              if (arm.on && new URL(url).pathname === '/internal/conference') {
+                arm.on = false;
+                throw new Error('network failure');
+              }
+              return stub.fetch(url, init);
+            },
+          };
+        },
+      },
+    };
+  }
+
+  test('an unretire whose fan-out fails answers 502 unretire_incomplete, and the repeated unretire repairs the object', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx);
+    ok(await send(ctx, 'DELETE', `/admin/conference?event=${SLUG}`));
+    const { arm, ns } = armedFanOut(ctx.CONFERENCE);
+    const env = { ...ctx.env, CONFERENCE: ns };
+    arm.on = true;
+    const first = await call(env, signed('PUT', '/admin/conferences', { body: { conferences: [{ ...conf(SLUG), unretire: true }] } }).build());
+    assert.deepEqual(pair(first), [502, { error: 'unretire_incomplete', unretire_failed: [SLUG], upserted: 1, searchable: 1, synced: 0, skipped_retired: [] }]);
+    assert.deepEqual([retiredOf(ctx), typeof ctx.obj().retiredAt], [[], 'number'], 'the tombstone is gone, the object still refuses');
+    // A plain upsert cannot repair it (its fan-out carries no flag) ...
+    const weekly = await call(env, signed('PUT', '/admin/conferences', { body: { conferences: [conf(SLUG)] } }).build());
+    assert.deepEqual(pair(weekly), [200, { upserted: 1, searchable: 1, synced: 0, skipped_retired: [] }]);
+    // ... the repeated unretire does, although no tombstone is left.
+    const again = await call(env, signed('PUT', '/admin/conferences', { body: { conferences: [{ ...conf(SLUG), unretire: true }] } }).build());
+    assert.deepEqual(pair(again), [200, { upserted: 1, searchable: 1, synced: 1, skipped_retired: [] }]);
+    assert.deepEqual([ctx.obj().retiredAt, ctx.obj().conf?.status], [null, 'searchable']);
+    ok(await send(ctx, 'POST', `/admin/talks?event=${SLUG}`, { generation: 1, talks: [] }));
+    assert.deepEqual(pair(await send(ctx, 'PUT', '/admin/conferences', { conferences: [conf(SLUG)] })), [200, { upserted: 1, searchable: 1, synced: 1, skipped_retired: [] }]);
+  });
+
+  test('stored text from before stripControls comes back clean from search, view and the moderation queue', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx);
+    const o = ctx.obj();
+    const p = await person(o, { name: 'Eve' });
+    const r1 = await person(o, { name: 'R1' });
+    const OSC52 = '\u001b]52;c;cHduZWQ=\u0007';
+    o.exec('UPDATE people SET display_name = ?, about = ?, contact_note = ?, linkedin_url = ? WHERE profile_id = ?',
+      `Eve${OSC52}`, `x\u001b[2J\u009b31m${OSC52}`, `n${OSC52}`, `https://www.linkedin.com/in/eve${OSC52}`, p.profile_id);
+    o.exec("INSERT INTO presence (profile_id, zone, spot, spot_pending, since_ms, until_ms) VALUES (?, 'Hallway', ?, 0, ?, ?)", p.profile_id, `door${OSC52}`, Date.now(), Date.now() + HOUR);
+    o.exec("INSERT INTO reports (id, target_kind, target_id, target_profile_id, reporter_id, reason, created_at_ms) VALUES (?, 'profile', ?, ?, ?, ?, ?)",
+      `profile:${p.ref}:${r1.profile_id}`, p.ref, p.profile_id, r1.profile_id, `spam${OSC52}`, Date.now());
+    o.exec('UPDATE people SET hidden = 1 WHERE profile_id = ?', p.profile_id);
+    o.store.invalidatePeople();
+    const answers = [
+      await send(ctx, 'GET', `/admin/people/search?event=${SLUG}&q64=${q64('Eve')}&include_hidden=1`),
+      await send(ctx, 'GET', `/admin/people/view?event=${SLUG}&ref=${p.ref}&fields=text,contact`),
+      await send(ctx, 'GET', `/admin/moderation?event=${SLUG}&since=2000-01-01T00:00:00Z`),
+    ];
+    // Every string in every answer, keys included.
+    const strings = (v, out = []) => {
+      if (typeof v === 'string') out.push(v);
+      else if (Array.isArray(v)) v.forEach((x) => strings(x, out));
+      else if (v && typeof v === 'object') {
+        for (const [k, x] of Object.entries(v)) {
+          out.push(k);
+          strings(x, out);
+        }
+      }
+      return out;
+    };
+    for (const a of answers) {
+      ok(a);
+      const all = strings(a.json);
+      assert.ok(all.some((x) => x.includes(']52;c;')), 'the fixture text is in the answer');
+      for (const x of all) assert.ok(!/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(x), JSON.stringify(x));
+    }
+    const v = answers[1].json.person;
+    assert.deepEqual([v.display_name, v.about, v.contact_note, v.linkedin_url, v.spot], ['Eve]52;c;cHduZWQ=', 'x[2J31m]52;c;cHduZWQ=', 'n]52;c;cHduZWQ=', 'https://www.linkedin.com/in/eve]52;c;cHduZWQ=', 'door]52;c;cHduZWQ=']);
+    assert.deepEqual(v.counts.reports.reasons, { 'spam]52;c;cHduZWQ=': 1 });
+    assert.equal(answers[0].json.people[0].display_name, 'Eve]52;c;cHduZWQ=');
+  });
+
+  test('an unretire during the removal supersedes it: step 3 keeps the row and answers 409 removal_superseded, and the conference stays live and visited by the cron', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx);
+    await person(ctx.obj(), { name: 'Ann' });
+    let mid = null;
+    const dir = {
+      ...ctx.DIRECTORY,
+      get: (id) => {
+        const stub = ctx.DIRECTORY.get(id);
+        return {
+          fetch: async (url, init) => {
+            if (!mid && new URL(url).pathname === `/internal/conference/${SLUG}`) {
+              mid = await send(ctx, 'PUT', '/admin/conferences', { conferences: [{ ...conf(SLUG), unretire: true }] });
+            }
+            return stub.fetch(url, init);
+          },
+        };
+      },
+    };
+    const r = await call({ ...ctx.env, DIRECTORY: dir }, signed('DELETE', `/admin/conference?event=${SLUG}`).build());
+    assert.deepEqual(pair(mid), [200, { upserted: 1, searchable: 1, synced: 1, skipped_retired: [] }]);
+    assert.equal(r.status, 409);
+    assert.deepEqual({ ...r.json, deleted: r.json.deleted.people }, { error: 'removal_superseded', step: 'directory', retired: false, wiped: true, deleted: 1 });
+    assert.deepEqual([directoryRows(ctx), retiredOf(ctx), ctx.obj().conf?.status, ctx.obj().retiredAt], [[SLUG], [], 'searchable', null]);
+    const targets = await (await ctx.DIRECTORY.get({ name: 'global' }).fetch('https://directory.internal/internal/cron-targets')).json();
+    assert.deepEqual(targets.targets, [{ slug: SLUG }]);
+  });
+
+  test('an unretire between the tombstone and the wipe also supersedes; the object it leaves wiped is repaired by repeating the unretire', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx);
+    let mid = null;
+    const cns = {
+      ...ctx.CONFERENCE,
+      get: (id) => {
+        const stub = ctx.CONFERENCE.get(id);
+        return {
+          fetch: async (url, init) => {
+            if (!mid && new URL(url).pathname === '/internal/wipe') mid = await send(ctx, 'PUT', '/admin/conferences', { conferences: [{ ...conf(SLUG), unretire: true }] });
+            return stub.fetch(url, init);
+          },
+        };
+      },
+    };
+    const r = await call({ ...ctx.env, CONFERENCE: cns }, signed('DELETE', `/admin/conference?event=${SLUG}`).build());
+    assert.deepEqual([r.status, r.json.error, mid.status], [409, 'removal_superseded', 200]);
+    assert.deepEqual([directoryRows(ctx), retiredOf(ctx), ctx.obj().conf, typeof ctx.obj().retiredAt], [[SLUG], [], null, 'number']);
+    ok(await send(ctx, 'PUT', '/admin/conferences', { conferences: [{ ...conf(SLUG), unretire: true }] }));
+    assert.deepEqual([ctx.obj().conf?.status, ctx.obj().retiredAt], ['searchable', null]);
+  });
+
+  test('unretire on a slug without a tombstone still sends its object the document with the flag, whatever the status', async () => {
+    const ctx = realEnv();
+    // Unavailable and never searchable: no object document, has_object 0, so a plain upsert sends nothing.
+    const plain = await send(ctx, 'PUT', '/admin/conferences', { conferences: [conf(SLUG, { status: 'unavailable' })] });
+    assert.deepEqual(plain.json, { upserted: 1, searchable: 0, synced: 0, skipped_retired: [] });
+    const flagged = await send(ctx, 'PUT', '/admin/conferences', { conferences: [{ ...conf(SLUG, { status: 'unavailable' }), unretire: true }] });
+    assert.deepEqual(flagged.json, { upserted: 1, searchable: 0, synced: 1, skipped_retired: [] });
+    assert.deepEqual([ctx.obj().conf?.status, rows(ctx.db('directory:global'), 'SELECT has_object FROM conferences')[0].has_object], ['unavailable', 1]);
+  });
+
+  test('step 3 never writes a tombstone: a retried removal of a slug that was unretired since is superseded, not re-retired', async () => {
+    const ctx = realEnv();
+    await withConferences(ctx);
+    const d = ctx.DIRECTORY.get({ name: 'global' });
+    const drop = await d.fetch(`https://directory.internal/internal/conference/${SLUG}`, { method: 'DELETE' });
+    assert.deepEqual([drop.status, await drop.json()], [409, { error: 'removal_superseded' }]);
+    assert.deepEqual([directoryRows(ctx), retiredOf(ctx)], [[SLUG], []]);
   });
 });
 

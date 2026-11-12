@@ -437,6 +437,7 @@ async function handleAdmin(request, env, url, header) {
     const searchable = docs.filter((c) => c.doc?.status === 'searchable');
     directory = null;
     let synced = 0;
+    const unretireFailed = [];
     for (const c of docs) {
       const r = await callDo(conferenceStub(env, c.slug), 'https://conference.internal/internal/conference', {
         method: 'PUT',
@@ -444,8 +445,15 @@ async function handleAdmin(request, env, url, header) {
         body: JSON.stringify({ doc: c.doc, route_prefix: c.route_prefix, ...(c.unretired === true ? { unretired: true } : {}) }),
       });
       if (r.ok) synced += 1;
+      else if (c.unretired === true && !unretireFailed.includes(c.slug)) unretireFailed.push(c.slug);
     }
     console.log(`admin conferences upserted=${upserted} searchable=${searchable.length} synced=${synced} skipped_retired=${skipped.length}`);
+    // An unretire whose document did not reach the object leaves the object refusing its
+    // conference (its removal marker stays), so the request answers 502 and the client repeats it;
+    // the repeat sends the flag again and clears the marker.
+    if (unretireFailed.length) {
+      return json(502, { error: 'unretire_incomplete', unretire_failed: unretireFailed, upserted, searchable: searchable.length, synced, skipped_retired: skipped });
+    }
     return json(200, { upserted, searchable: searchable.length, synced, skipped_retired: skipped });
   }
 
@@ -481,8 +489,10 @@ async function handleAdmin(request, env, url, header) {
 // already_retired_at: <ISO of the earlier tombstone> | null}; a second removal answers zero counts.
 // A failure of step 1 is answered as it is (nothing changed). A failure of step 2 or 3 is answered
 // with that step's status (and Retry-After) and {error: "removal_incomplete", step: "wipe" |
-// "directory", retired: true, wiped, deleted?, cause?}: the tombstone holds, and the same removal
-// sent again finishes the work.
+// "directory", retired: true, wiped, cause?, deleted?}: the tombstone holds, and the same removal
+// sent again finishes the work. When an unretire of the slug ran during the removal (its tombstone
+// is gone at step 3), the row is kept and the answer is 409 {error: "removal_superseded", step:
+// "directory", retired: false, wiped: true, deleted}.
 async function removeConference(request, env, url, verified) {
   if (request.method !== 'DELETE') throw reply(405, { error: 'Method not allowed' }, { Allow: 'DELETE' });
   const slug = url.searchParams.get('event');
@@ -504,7 +514,12 @@ async function removeConference(request, env, url, verified) {
       method: 'DELETE',
       headers: forwardHeaders(request, null),
     });
-    if (!dir.ok) return removalIncomplete(dir, { step: 'directory', retired: true, wiped: true, deleted });
+    if (dir.status === 409) {
+      // An unretire ran during the removal: the directory keeps its row and the unretire's object
+      // stands, wiped by step 2. Nothing is left to finish; the operator decides what comes next.
+      return json(409, { error: 'removal_superseded', step: 'directory', retired: false, wiped: true, deleted });
+    }
+    if (!dir.ok) return removalIncomplete(dir, { step: 'directory', retired: true, wiped: true }, deleted);
     const { removed } = await dir.json();
     return json(200, { ok: true, deleted, directory: removed, retired: true, already_retired_at: alreadyRetiredAt });
   } finally {
@@ -513,8 +528,10 @@ async function removeConference(request, env, url, verified) {
 }
 
 // The answer to a removal that stopped after its tombstone: the failing step's status and
-// Retry-After, what was done, and the step's own short error code as cause.
-async function removalIncomplete(res, done) {
+// Retry-After, what was done, the step's own short error code as cause, and the wipe's counts when
+// there are some. cause comes before the counts, so a client that reads the first 200 characters
+// of a 503 (adminClient) sees daily_limit and does not retry until the reset.
+async function removalIncomplete(res, done, deleted) {
   let cause = null;
   try {
     const e = (await res.json())?.error;
@@ -523,7 +540,8 @@ async function removalIncomplete(res, done) {
     /* not JSON */
   }
   const retry = res.headers.get('retry-after');
-  return json(res.status, { error: 'removal_incomplete', ...done, ...(cause ? { cause } : {}) }, retry ? { 'Retry-After': retry } : {});
+  const body = { error: 'removal_incomplete', ...done, ...(cause ? { cause } : {}), ...(deleted ? { deleted } : {}) };
+  return json(res.status, body, retry ? { 'Retry-After': retry } : {});
 }
 
 // GET /admin/stats without event (W7.5): the cross-conference usage totals and holds the cron

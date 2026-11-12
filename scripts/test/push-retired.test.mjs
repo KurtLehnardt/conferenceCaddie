@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { upsertConferences, planPush, pushEvent } from '../../worker/ingest/push-ingest.mjs';
+import { upsertConferences, planPush, pushEvent, conferenceForWorker } from '../../worker/ingest/push-ingest.mjs';
 import { send as migrate } from '../../worker/ingest/migrate-from-backup.mjs';
 import { loadStoplist } from '../../worker/ingest/topics-local.mjs';
 
@@ -120,4 +120,47 @@ test('migrate-from-backup sends nothing more for a slug the Worker skipped as re
   }
   assert.equal(lines.filter((l) => l.startsWith('gone-2099: skipped')).length, 1);
   assert.ok(!lines.some((l) => l.includes('Bad')));
+});
+
+test('push-ingest never sends unretire, so a run of the ingest cannot bring a removed conference back', () => {
+  const conf = { slug: 'gone-2099', status: 'searchable', unretire: true, counts: { sessions: 3, talk: 3 } };
+  assert.deepEqual(conferenceForWorker(conf, undefined), { slug: 'gone-2099', status: 'searchable', counts: { sessions: 3, talk: 3 } });
+  const prepared = { dropped: 1, talks: [talk('gone-2099', 1), talk('gone-2099', 2)] };
+  const out = conferenceForWorker(conf, prepared);
+  assert.ok(!('unretire' in out));
+  assert.equal(out.counts.sessions, 2, 'the takedown recount still applies');
+  assert.equal(conf.unretire, true, 'the local document is not changed');
+});
+
+test('migrate-from-backup skips a conference whose object answers "conference is not available", names it, and carries on', async () => {
+  const byConf = (make) => new Map(['first-2099', 'bare-2099', 'last-2099'].map((slug) => [slug, make(slug)]));
+  const plan = {
+    talks: { byConf: byConf((slug) => [talk(slug, 1)]) },
+    topics: { byConf: byConf((slug) => [{ topic_id: 'k8s', conference: slug }]) },
+    people: { byEvent: byConf(() => [{ profile_id: 'A'.repeat(22) }]) },
+  };
+  const { admin: inner, calls } = recordingAdmin([]);
+  const admin = async (method, url, body) => {
+    if (url.includes('event=bare-2099')) {
+      calls.push({ method, url, body });
+      const err = new Error(`${method} ${url.split('?')[0]}: status 400 (conference is not available)`);
+      err.status = 400;
+      throw err;
+    }
+    return inner(method, url, body);
+  };
+  const lines = await migrate(plan, admin);
+  // One refused call, then nothing more for that conference; the others get everything.
+  assert.deepEqual(calls.filter((c) => c.url.includes('bare-2099')).map((c) => c.url), ['/admin/talks?event=bare-2099']);
+  for (const slug of ['first-2099', 'last-2099']) {
+    for (const route of ['/admin/talks?', '/admin/talks/finalize?', '/admin/topics?', '/admin/people?']) assert.ok(calls.some((c) => c.url === `${route}event=${slug}`), `${route} ${slug}`);
+  }
+  assert.equal(lines.filter((l) => l.startsWith('bare-2099: skipped') && l.includes('not available')).length, 1);
+  // Any other failure still stops the run.
+  const other = async () => {
+    const err = new Error('PUT /admin/topics: status 409 (conflict)');
+    err.status = 409;
+    throw err;
+  };
+  await assert.rejects(migrate({ topics: { byConf: new Map([['x-2099', []]]) } }, other), /409/);
 });

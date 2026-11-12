@@ -155,12 +155,14 @@ export class DirectoryDO extends DurableObject {
   // A slug with a retired row (DELETE /admin/conference) is skipped and listed in skipped_retired,
   // unless a document of that slug in the batch carries the top-level key "unretire": true (read
   // in a first pass, so the order of duplicates does not matter). Then the row is deleted in the
-  // same transaction as the upsert, after it, and the slug's fan-out entry carries unretired: true
-  // (sent whatever the status, and has_object set), which is the only fan-out a removed object
-  // accepts (conference.js, retired_at). The key is never stored. It must be a
-  // boolean when present (400 otherwise, before anything is written); it lives in the body, never
-  // the query, so the signature's body hash covers it. The route prefixes are computed first (an
-  // await), then every write runs in one transaction against the tombstones as they are at that
+  // same transaction as the upsert, after it. Every fan-out entry of a slug the batch unretires
+  // carries unretired: true and is sent whatever the status (has_object set), with or without a
+  // tombstone: that flag is the only fan-out a removed object accepts (conference.js, retired_at),
+  // so an unretire repeated after its fan-out failed still clears the object's marker (the Worker
+  // answers 502 for such a failure, so the client repeats it). The key is never stored. It must be
+  // a boolean when present (400 otherwise, before anything is written); it lives in the body,
+  // never the query, so the signature's body hash covers it. The route prefixes are computed first
+  // (an await), then every write runs in one transaction against the tombstones as they are at that
   // moment, so a removal that ran meanwhile is honoured.
   async #upsert(request) {
     const body = await readJson(request, new Set(['conferences']));
@@ -207,7 +209,8 @@ export class DirectoryDO extends DurableObject {
         const status = doc.status === 'searchable' ? 'searchable' : 'unavailable';
         // An unretired conference's object is sent its document whatever the status, so it drops
         // the removal marker; it then holds a document, which is what has_object records.
-        const hasObject = status === 'searchable' || prev?.has_object === 1 || wasRetired;
+        const unretired = unretiring.has(doc.slug);
+        const hasObject = status === 'searchable' || prev?.has_object === 1 || unretired;
         if (!prev || prev.doc !== text || (hasObject && prev.has_object !== 1)) {
           this.sql.exec(
             `INSERT INTO conferences (slug, doc, status, start_date, end_date, name, route_prefix, updated_at_ms, has_object, holds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -224,7 +227,7 @@ export class DirectoryDO extends DurableObject {
           retired.delete(doc.slug);
         }
         upserted += 1;
-        if (hasObject) searchable.push({ slug: doc.slug, doc, route_prefix: prefix, ...(wasRetired ? { unretired: true } : {}) });
+        if (hasObject) searchable.push({ slug: doc.slug, doc, route_prefix: prefix, ...(unretired ? { unretired: true } : {}) });
       }
     });
     this.docs = null;
@@ -248,14 +251,18 @@ export class DirectoryDO extends DurableObject {
   }
 
   // DELETE /internal/conference/<slug> (step 3, after the object's wipe): deletes the conference row
-  // (removed: 1, or 0 when the directory did not know it) and keeps a tombstone, writing one only
-  // if step 1's is somehow missing. Idempotent.
+  // only while step 1's tombstone still exists (removed: 1, or 0 when the directory did not know
+  // the slug), and never writes a tombstone. When the tombstone is gone, an unretire ran during the
+  // removal and its row and object are the conference now: 409 removal_superseded, nothing deleted.
+  // Idempotent.
   #dropRow(slug) {
     let removed = 0;
+    let retired = false;
     this.state.storage.transactionSync(() => {
-      removed = this.sql.exec('DELETE FROM conferences WHERE slug = ? RETURNING 1', slug).toArray().length;
-      this.sql.exec('INSERT INTO retired (slug, at_ms) VALUES (?, ?) ON CONFLICT(slug) DO NOTHING', slug, Date.now());
+      retired = this.sql.exec('SELECT 1 FROM retired WHERE slug = ?', slug).toArray().length > 0;
+      removed = this.sql.exec('DELETE FROM conferences WHERE slug = ? AND EXISTS (SELECT 1 FROM retired WHERE slug = ?) RETURNING 1', slug, slug).toArray().length;
     });
+    if (!retired) return json(409, { error: 'removal_superseded' });
     this.docs = null;
     return json(200, { ok: true, removed });
   }

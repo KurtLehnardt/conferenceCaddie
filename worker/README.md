@@ -454,9 +454,13 @@ serves it before anything runs, and safe to repeat, because a client signs every
 applying the same request twice answers success both times and leaves the same stored state, except
 where a route below says a retry answers 404. The answers name people by `ref` and display name
 only: none carries a `profile_id`, a secret hash, a reporter id, a push endpoint or key, a zone, a
-position, a cell or any Bluetooth field. An unknown `ref` answers `404 {"error":"not_found"}`, and
-a malformed parameter, an unknown or repeated query parameter, or an unknown body key answers 400.
-Nothing here is logged beyond the Worker's usual line (method, path template, status, duration).
+position, a cell or any Bluetooth field. Every stored string they answer with (names, profile
+text, a spot line, a link, report reasons, as values or as keys) has its control characters
+removed on the way out, also for rows written before people text was stripped on write; the CLI
+escapes what it prints as well, which is the layer that protects the terminal. An unknown `ref`
+answers `404 {"error":"not_found"}`, and a malformed parameter, an unknown or repeated query
+parameter, or an unknown body key answers 400. Nothing here is logged beyond the Worker's usual
+line (method, path template, status, duration).
 
 - `GET /admin/people/search?event=<slug>&q64=<text>[&limit=<n>][&include_hidden=0|1]` finds people
   by name. `q64` is the search text as base64url without padding, 1 to 200 bytes of UTF-8 with no
@@ -513,7 +517,8 @@ Nothing here is logged beyond the Worker's usual line (method, path template, st
      marker `meta.retired_at`, and drops its caches, its conference document and its rate-limit
      buckets. A request that was waiting on an await when the wipe ran writes nothing afterwards:
      it answers `400 conference is not available`.
-  3. The DirectoryDO deletes the conference row.
+  3. The DirectoryDO deletes the conference row, but only while the tombstone of step 1 is still
+     there; it never writes one.
 
   The answer is `{"ok": true, "deleted": {"<table>": <rows>}, "directory": 1 | 0, "retired": true,
   "already_retired_at": "<ISO>" | null}`. `directory` is 0 when the directory did not know the
@@ -522,8 +527,14 @@ Nothing here is logged beyond the Worker's usual line (method, path template, st
   counts are all zero, says it had already happened. A failure of step 1 is answered as it is, and
   nothing changed. A failure of step 2 or 3 answers that step's status (with its `Retry-After`)
   and `{"error": "removal_incomplete", "step": "wipe" | "directory", "retired": true, "wiped":
-  <bool>, "deleted": {...} (after the wipe), "cause": "<the step's error>"}`: the tombstone holds,
-  and sending the removal again finishes it. The tables stay (no `storage.deleteAll()`), so the
+  <bool>, "cause": "<the step's error>", "deleted": {...} (after the wipe)}`, `cause` first so a
+  client that reads the start of a 503 sees `daily_limit`: the tombstone holds, and sending the
+  removal again finishes it. If the tombstone is gone at step 3, an unretire of the slug ran
+  during the removal and won: the row is kept and the answer is `409 {"error":
+  "removal_superseded", "step": "directory", "retired": false, "wiped": true, "deleted": {...}}`.
+  The conference is then as the unretire left it, except that step 2 emptied its object; if the
+  unretire's document reached the object before the wipe, the wipe set the marker again, and
+  repeating the unretire clears it. Decide whether to unretire again or remove again. The tables stay (no `storage.deleteAll()`), so the
   object can take the conference again. While `retired_at` is set, the object refuses a conference
   document from the fan-out of `PUT /admin/conferences` (`409 conference_retired`) unless that
   fan-out unretired it, so an ingest that read the directory before the removal cannot make the
@@ -544,9 +555,15 @@ Nothing here is logged beyond the Worker's usual line (method, path template, st
   weekly ingest cannot bring a removed conference back. When any document of that slug in the
   request carries the top-level key `"unretire": true`, the tombstone is deleted, in the same
   transaction as the upsert and after it, and the conference's object is sent the document whatever
-  its status, with the flag that lets it drop its `retired_at` marker. The key is never stored, it
-  must be a boolean when present (otherwise the whole request is 400 and nothing is written), and
-  on a slug without a tombstone it changes nothing. `push-ingest.mjs` and
+  its status, with the flag that lets it drop its `retired_at` marker. That happens whenever the
+  request unretires the slug, with or without a tombstone, so on a slug without a tombstone the
+  flag still sends the object its document and clears a marker left there (for example by an
+  unretire whose fan-out failed). When the document of an unretired slug does not reach its object,
+  the answer is `502 {"error": "unretire_incomplete", "unretire_failed": ["<slug>"], "upserted",
+  "searchable", "synced", "skipped_retired"}`, so the client repeats the request, and the repeat
+  repairs the object. The key is never stored, and it must be a boolean when present (otherwise the
+  whole request is 400 and nothing is written). `push-ingest.mjs` never sends it, whatever a
+  conference document holds, so no ingest run can unretire. `push-ingest.mjs` and
   `migrate-from-backup.mjs` log each skipped slug by name and send nothing more for it, and
   `push-ingest.mjs` lists it under `skipped_retired` in its `--report`, not under `upserted`.
 
@@ -554,7 +571,9 @@ People text is stored without control characters: every write of a display name,
 contact note, a spot line, a meet note or a how-to-spot-me line drops the C0 controls except tab
 and newline, DEL and the C1 controls (U+0080 to U+009F), after turning CRLF and a lone CR into a
 newline. Bidirectional marks stay. The line filter sees the text after this, so a control
-character cannot split a listed word.
+character can no longer split a listed word. That holds for control characters only: any other
+character the filter turns into a space (punctuation, a zero-width space, a line separator) still
+splits a word, as before.
 
 To bring a removed conference back, clear its tombstone with a signed `PUT /admin/conferences`
 whose document carries `"unretire": true`, then push the conference again. The CLI does both with
@@ -580,8 +599,9 @@ The tombstone is the `retired` table of the DirectoryDO; nothing else reads or w
 
 Before removing a conference: do it well away from the daily written-rows limit, because a wipe
 deletes every row of the conference (several thousand for a large one) and every deleted row is a
-written row; do not remove it while an ingest run is pushing it; and if the answer is
-`removal_incomplete`, send the same removal again (the CLI re-signs it) until it answers 200.
+written row; do not remove it while an ingest run is pushing it; never unretire a conference
+while its removal is running; and if the answer is `removal_incomplete`, send the same removal
+again (the CLI re-signs it) until it answers 200.
 
 ## Logs and CPU
 

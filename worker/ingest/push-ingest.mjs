@@ -129,6 +129,17 @@ export function workerTalks(slug, talks, takedowns) {
   return { talks: out, dropped: talks.length - out.length, redacted, entries };
 }
 
+/**
+ * The conference document as PUT /admin/conferences gets it: without the `unretire` key, so a run
+ * of the ingest (in CI or by hand) can never bring back a conference the operator removed, whatever
+ * a committed conference.json holds; and with its counts recomputed when takedowns dropped talks.
+ * `prepared` is the conference's workerTalks() result, or undefined.
+ */
+export function conferenceForWorker(conf, prepared) {
+  const { unretire, ...doc } = conf;
+  return prepared?.dropped ? { ...doc, counts: countsAfterTakedowns(doc.counts ?? {}, prepared.talks) } : doc;
+}
+
 /** The counts block of a conference document, recomputed over the talks that remain after takedowns. */
 export function countsAfterTakedowns(counts, talks) {
   const next = { ...counts, sessions: talks.length, with_slides: 0, sponsor: 0 };
@@ -277,10 +288,7 @@ async function main() {
       prepared.set(c.slug, { error: e });
     }
   }
-  const forWorker = (c) => {
-    const p = prepared.get(c.slug);
-    return p?.dropped ? { ...c, counts: countsAfterTakedowns(c.counts ?? {}, p.talks) } : c;
-  };
+  const forWorker = (c) => conferenceForWorker(c, prepared.get(c.slug));
   if (!dryRun) {
     // A schedule that could not be fetched this time (status_reason fetch_failed, which
     // scripts/ingest.mjs records on a transient error) must not take down a conference the Worker
