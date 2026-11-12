@@ -36,6 +36,16 @@ export function adminRoot(env = {}) {
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
+// A key that PUT /admin/conferences reads as an instruction rather than a conference field:
+// "unretire" or "expect_status", or one that differs from either only in letter case or
+// surrounding whitespace, which the Worker refuses with 400 ("the key must be written exactly as
+// ..."; worker/src/directory.js #upsert). A conference document never carries one on purpose.
+export const isControlKey = (key) => ['unretire', 'expect_status'].includes(key.trim().toLowerCase());
+// The document without its control keys. The local files are read through it, so no rewrite of
+// data/<slug>/conference.json (hide, unhide, remove) keeps one and no backend call is given one;
+// the tier 2 adapter drops them again from what it sends and adds its own flag and precondition.
+export const withoutControlKeys = (doc) => Object.fromEntries(Object.entries(doc).filter(([key]) => !isControlKey(key)));
+
 export function readOperatorFile(root) {
   const path = join(root, OPERATOR_FILE);
   if (!existsSync(path)) return { hidden: {}, removed: {} };
@@ -65,7 +75,7 @@ function readConference(root, slug) {
   if (!existsSync(path)) return null;
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8'));
-    return isPlainObject(parsed) ? parsed : null;
+    return isPlainObject(parsed) ? withoutControlKeys(parsed) : null;
   } catch {
     throw new AdminError(`${relative(root, path)} is not valid JSON`);
   }
@@ -180,8 +190,9 @@ export function withConferenceFiles(adapter, { root, now = () => new Date(), tie
     // removal that an unretire overtook or an unretire whose fan-out failed), and the documented
     // repair is to run the unretire again; so it is sent without a local entry too, but then only
     // with the local conference document (the slug alone would be stored as an unavailable
-    // conference), and the tier 2 adapter refuses a slug the Worker lists with another status.
-    // The local entry is dropped when there is one.
+    // conference), and the tier 2 adapter refuses a slug the Worker lists with another status and
+    // sends the status it read as expect_status, which the Worker checks (409 status_mismatch).
+    // The local entry is dropped when there is one, and only after the Worker took the unretire.
     async unretireConference({ event, slug, mode }) {
       const operator = readOperatorFile(root);
       const recorded = !!operator.removed[slug];
