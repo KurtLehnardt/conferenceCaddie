@@ -25,8 +25,8 @@ class CaddieApplication : Application() {
         // database is deferred to its own thread, so this is quick on the main thread. The service
         // also calls this for a Stop tapped in a process that has no people features yet. A build
         // without native Bluetooth (a release build, until the exit test on real phones has passed)
-        // sets no hook: it has no radio, so a restarted service, which it can never have started,
-        // only stops after its grace.
+        // sets no hook: it has no radio, and its manifest declares no Bluetooth service at all
+        // (src/ble/AndroidManifest.xml is merged only where the feature is on).
         if (BuildConfig.CADDIE_BLE_ENABLED) {
             AndroidBleRadio.onSystemRestart = { context ->
                 val controller = CaddiePeople.controller(context)
