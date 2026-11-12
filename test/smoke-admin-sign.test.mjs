@@ -1,7 +1,7 @@
 // The admin-auth plumbing of scripts/smoke.mjs: with SMOKE_ADMIN_AUTH=signed every admin call
 // carries an X-Caddie-Admin header that verifies with scripts/lib/admin-sign.mjs and no
-// Authorization header; a retried admin call is signed afresh (a new nonce); the default, bearer,
-// sends Authorization: Bearer as before; and when the Worker's /admin/test/* fixtures answer 404
+// Authorization header, which is the default; a retried admin call is signed afresh (a new nonce);
+// SMOKE_ADMIN_AUTH=bearer sends Authorization: Bearer; and when the Worker's /admin/test/* fixtures answer 404
 // while GET /admin/stats works, the checks that need them print SKIP naming ADMIN_TEST_ROUTES.
 //
 // Run with `npm test`. The smoke runs as a child process against a loopback stub that answers
@@ -16,6 +16,7 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { capabilitiesDocument } from '../worker/src/capabilities.js';
 import { EMPTY_BODY_SHA256, verifyAdminSignature } from '../scripts/lib/admin-sign.mjs';
 
 const SMOKE = fileURLToPath(new URL('../scripts/smoke.mjs', import.meta.url));
@@ -93,6 +94,9 @@ function runSmoke(port, extraEnv) {
       SMOKE_TALKS: 'data',
       SMOKE_BUNDLE_BASE: `http://127.0.0.1:${port}/bundles/`,
       SMOKE_UNAVAILABLE: PRIMARY,
+      // The loopback stub stands for a deployed Worker unless a test says otherwise (SMOKE_TREAT_AS_REMOTE is
+      // test-only): a gated fixture is a SKIP there and a FAIL with a hint against a local one.
+      SMOKE_TREAT_AS_REMOTE: '1',
       ...extraEnv,
     };
     const child = spawn(process.execPath, [SMOKE], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -118,8 +122,8 @@ describe('scripts/smoke.mjs admin auth', { timeout: 300_000 }, () => {
     // The two runs are independent, each with its own stub, so they run at once.
     const [s, b] = await Promise.all([stubWorker({ authOk: signedOk }), stubWorker({ authOk: bearerOk })]);
     const [rs, rb] = await Promise.all([
-      runSmoke(s.port, { SMOKE_ADMIN_AUTH: 'signed' }),
-      runSmoke(b.port, {}),
+      runSmoke(s.port, {}),
+      runSmoke(b.port, { SMOKE_ADMIN_AUTH: 'bearer' }),
     ]);
     signed = { ...rs, requests: s.requests, server: s.server };
     bearer = { ...rb, requests: b.requests, server: b.server };
@@ -174,7 +178,7 @@ describe('scripts/smoke.mjs admin auth', { timeout: 300_000 }, () => {
     assert.ok(bearerFailed && bearer.requests.some((r) => r !== bearerFailed && r.path === bearerFailed.path && bearerOk(r)));
   });
 
-  test('SMK-1: the default is bearer, which sends Authorization: Bearer and no X-Caddie-Admin', () => {
+  test('SMK-1: SMOKE_ADMIN_AUTH=bearer sends Authorization: Bearer and no X-Caddie-Admin', () => {
     const calls = adminCalls(bearer.requests, bearerOk);
     assert.ok(calls.length >= 3);
     for (const r of calls) {
@@ -226,6 +230,133 @@ describe('scripts/smoke.mjs admin auth', { timeout: 300_000 }, () => {
   });
 });
 
+test('the default is signed: no SMOKE_ADMIN_AUTH sends X-Caddie-Admin and no Authorization', async () => {
+  const { server, requests, port } = await stubWorker({ authOk: signedOk });
+  try {
+    await runSmoke(port, {});
+    const calls = adminCalls(requests, signedOk);
+    assert.ok(calls.length >= 3);
+    assert.ok(requests.every((r) => r.authorization === null));
+  } finally {
+    server.close();
+  }
+});
+
+test('gated fixtures FAIL with the .dev.vars hint against a loopback API, and SKIP against a deployed one', async () => {
+  const { server, port } = await stubWorker({ authOk: signedOk });
+  try {
+    const local = await runSmoke(port, { SMOKE_TREAT_AS_REMOTE: '' });
+    const hint = 'set ADMIN_TEST_ROUTES=1 in worker/.dev.vars (or run npm --prefix worker run dev-vars, which adds it when absent)';
+    for (const check of ['meter1', 'p1b', 'p7', 'q7', 'unav1']) {
+      const fail = local.lines.find((l) => l.startsWith(`FAIL ${check}:`));
+      assert.ok(fail?.includes(hint), `${check} must FAIL with the hint:\n${local.lines.filter((l) => l.includes(`${check}:`)).join('\n')}`);
+      assert.ok(!skipLine(local.lines, check), `${check} must not SKIP against a loopback API`);
+    }
+    assert.ok(!local.lines.some((l) => l.includes('SMOKE_TREAT_AS_REMOTE')), 'no NOTE when the override is off');
+    const remote = await runSmoke(port, {});
+    assert.ok(remote.lines.includes('NOTE SMOKE_TREAT_AS_REMOTE=1: a loopback API counts as deployed'), 'the override prints its NOTE');
+    for (const check of ['meter1', 'p1b', 'p7', 'q7', 'unav1']) {
+      assert.ok(skipLine(remote.lines, check)?.includes('ADMIN_TEST_ROUTES'), `${check} must SKIP against a deployed Worker`);
+      assert.ok(!remote.lines.some((l) => l.startsWith(`FAIL ${check}:`)));
+    }
+  } finally {
+    server.close();
+  }
+});
+
+// A redirect on an API request (api(); the stub redirects /api/search) is never followed either: the target is never called and
+// the check FAILs naming 302.
+test('a 302 on an API request is a FAIL naming 302, never followed or retried', async () => {
+  const other = await stubWorker({ authOk: () => true });
+  const { server, port } = await stubWorker({ authOk: signedOk });
+  const base = server.listeners('request')[0];
+  server.removeAllListeners('request');
+  let searches = 0;
+  server.on('request', (req, res) => {
+    if (req.url.startsWith('/api/search')) {
+      searches++;
+      res.writeHead(302, { location: `http://127.0.0.1:${other.port}${req.url}` });
+      return res.end('moved');
+    }
+    return base(req, res);
+  });
+  try {
+    const run = await runSmoke(port, {});
+    assert.equal(other.requests.length, 0, 'the redirect target was called');
+    assert.ok(run.lines.some((l) => l.startsWith('FAIL ') && l.includes('answered 302')), 'a FAIL names 302');
+    assert.ok(!run.lines.some((l) => l.startsWith('NOTE ') && l.includes('/api/search')), 'no retry NOTE for the redirect');
+    assert.ok(searches > 0);
+  } finally {
+    server.close();
+    other.server.close();
+  }
+});
+
+// cap1 compares the Worker's bundle_base with the configured base (SMOKE_BUNDLE_BASE, then
+// CADDIE_BUNDLE_BASE, then the default), so a fork with its own TALKS_BUNDLE_BASE passes.
+describe('cap1 and the configured bundle base', { timeout: 120_000 }, () => {
+  const OWN = 'https://fork.example.github.io/caddie-fork/bundles/';
+  const OTHER = 'https://other.example.github.io/x/bundles/';
+  const DEFAULT = 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
+  async function run(advertised, env) {
+    const { server, port } = await stubWorker({ authOk: signedOk });
+    const base = server.listeners('request')[0];
+    server.removeAllListeners('request');
+    server.on('request', (req, res) => {
+      if (req.url === '/api/capabilities') {
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'public, max-age=300', 'access-control-allow-origin': '*' });
+        return res.end(JSON.stringify(capabilitiesDocument({ TALKS_BUNDLE_BASE: advertised })));
+      }
+      return base(req, res);
+    });
+    try {
+      const r = await runSmoke(port, { SMOKE_BUNDLE_BASE: '', ...env });
+      return { ...r, cap1: r.lines.find((l) => /^(PASS|FAIL) cap1:/.test(l)) };
+    } finally {
+      server.close();
+    }
+  }
+  test('SMOKE_BUNDLE_BASE is the expected base', async () => {
+    const r = await run(OWN, { SMOKE_BUNDLE_BASE: OWN });
+    assert.ok(r.cap1?.startsWith('PASS cap1:'), r.cap1);
+  });
+  test('CADDIE_BUNDLE_BASE is used when SMOKE_BUNDLE_BASE is not set', async () => {
+    const r = await run(OWN, { CADDIE_BUNDLE_BASE: OWN });
+    assert.ok(r.cap1?.startsWith('PASS cap1:'), r.cap1);
+  });
+  test('cap1 order: SMOKE_CAPS_BUNDLE_BASE, then CADDIE_BUNDLE_BASE, then an https SMOKE_BUNDLE_BASE', async () => {
+    const a = await run(OWN, { SMOKE_CAPS_BUNDLE_BASE: OWN, CADDIE_BUNDLE_BASE: OTHER, SMOKE_BUNDLE_BASE: OTHER });
+    assert.ok(a.cap1?.startsWith('PASS cap1:'), a.cap1);
+    const b = await run(OWN, { CADDIE_BUNDLE_BASE: OWN, SMOKE_BUNDLE_BASE: OTHER });
+    assert.ok(b.cap1?.startsWith('PASS cap1:'), b.cap1);
+  });
+  test('an http loopback SMOKE_BUNDLE_BASE does not make cap1 fail: the Worker advertises https', async () => {
+    const r = await run(DEFAULT, { SMOKE_BUNDLE_BASE: 'http://127.0.0.1:9/bundles/' });
+    assert.ok(r.cap1?.startsWith('PASS cap1:'), r.cap1);
+    const caps = await run(OWN, { SMOKE_BUNDLE_BASE: 'http://127.0.0.1:9/bundles/', SMOKE_CAPS_BUNDLE_BASE: OWN });
+    assert.ok(caps.cap1?.startsWith('PASS cap1:'), caps.cap1);
+  });
+  test('a base that differs from the Worker\'s FAILs cap1 naming bundle_base', async () => {
+    const r = await run(OWN, { SMOKE_BUNDLE_BASE: OTHER });
+    assert.ok(r.cap1?.startsWith('FAIL cap1:') && r.cap1.includes('bundle_base'), r.cap1);
+  });
+  test('with nothing configured the default is expected', async () => {
+    const r = await run(DEFAULT, {});
+    assert.ok(r.cap1?.startsWith('PASS cap1:'), r.cap1);
+    const fork = await run(OWN, {});
+    assert.ok(fork.cap1?.startsWith('FAIL cap1:') && fork.cap1.includes('SMOKE_CAPS_BUNDLE_BASE'), fork.cap1);
+  });
+  test('the default base against a remote API prints one NOTE naming SMOKE_BUNDLE_BASE; a configured base prints none', async () => {
+    const note = (r) => r.lines.filter((l) => l.startsWith('NOTE the default bundle base is used against a remote API'));
+    const remote = await run(DEFAULT, {});
+    assert.equal(note(remote).length, 1);
+    assert.ok(note(remote)[0].includes('SMOKE_BUNDLE_BASE'));
+    assert.equal(note(await run(OWN, { SMOKE_BUNDLE_BASE: OWN })).length, 0);
+    assert.equal(note(await run(OWN, { CADDIE_BUNDLE_BASE: OWN })).length, 0);
+    assert.equal(note(await run(DEFAULT, { SMOKE_TREAT_AS_REMOTE: '' })).length, 0, 'a loopback API prints none');
+  });
+});
+
 test('SMOKE_ADMIN_AUTH refuses an unknown value before any request', async () => {
   const { server, requests, port } = await stubWorker({ authOk: () => false });
   try {
@@ -249,3 +380,40 @@ test('signed mode refuses a token shorter than 32 characters before any request'
     server.close();
   }
 });
+
+// SEC: an admin request never follows a redirect. The stub answers every /admin/ request with a 302
+// to a second loopback server (another origin); a followed redirect would carry X-Caddie-Admin and
+// the signed body there. The second server must never be called, the check must FAIL naming 302, and
+// the 3xx must never be retried (no NOTE line, and no second request for the same signed call).
+for (const [mode, ok] of [['signed', signedOk], ['bearer', bearerOk]]) {
+  test(`a 302 from the API on an admin request is a FAIL naming 302, never followed or retried (${mode})`, async () => {
+    const other = await stubWorker({ authOk: () => true });
+    const { server, requests, port } = await stubWorker({ authOk: ok });
+    const base = server.listeners('request')[0];
+    server.removeAllListeners('request');
+    server.on('request', (req, res) => {
+      if (req.url.startsWith('/admin/') && (req.headers['x-caddie-admin'] || req.headers.authorization) && !req.headers.origin) {
+        requests.push({ method: req.method, path: req.url, signed: req.headers['x-caddie-admin'] ?? null, authorization: req.headers.authorization ?? null, origin: null, redirected: true });
+        res.writeHead(302, { location: `http://127.0.0.1:${other.port}${req.url}` });
+        return res.end('moved');
+      }
+      return base(req, res);
+    });
+    try {
+      const run = await runSmoke(port, { SMOKE_ADMIN_AUTH: mode });
+      assert.equal(other.requests.length, 0, `the redirect target was called: ${JSON.stringify(other.requests.map((r) => r.path))}`);
+      const fails = run.lines.filter((l) => l.startsWith('FAIL ') && /\b302\b/.test(l));
+      assert.ok(fails.length > 0, 'a FAIL line names 302');
+      assert.ok(run.lines.some((l) => l.startsWith('FAIL ') && l.includes('answered 302')), 'admin() fails naming 302');
+      assert.ok(!run.lines.some((l) => l.startsWith('NOTE ') && l.includes('(admin)')), 'no admin retry NOTE');
+      const redirected = requests.filter((r) => r.redirected && r.origin === null);
+      const nonces = redirected.map((r) => r.signed ?? r.authorization);
+      assert.ok(redirected.length > 0);
+      if (mode === 'signed') assert.equal(new Set(nonces).size, nonces.length, 'no signed header was sent twice');
+      assert.ok(!run.stdout.includes(TOKEN));
+    } finally {
+      server.close();
+      other.server.close();
+    }
+  });
+}
