@@ -38,7 +38,7 @@
 //                        Default signed. No admin request follows a redirect: a 3xx is a FAIL.
 //                        When the Worker answers 404 to a /admin/test/* fixture while GET /admin/stats
 //                        works, its test routes are gated off (ADMIN_TEST_ROUTES is not "1" on that
-//                        Worker); against localhost, 127.0.0.1 or [::1] that FAILs with a hint to set
+//                        Worker); against a loopback API (localhost, *.localhost, 127.0.0.0/8, 0.0.0.0, [::1], IPv4-mapped [::ffff:7f..:..]) that FAILs with a hint to set
 //                        ADMIN_TEST_ROUTES=1 in worker/.dev.vars. SMOKE_TREAT_AS_REMOTE=1 (test-only)
 //                        makes a loopback API count as deployed. Against a deployed Worker the checks
 //                        that need the fixtures (meter1, the expired profile, the aged presence,
@@ -58,7 +58,8 @@
 //                        data/ snapshot. Check bun1 compares every searchable conference with its bundle.
 //   SMOKE_BUNDLE_BASE    the talk bundle base for SMOKE_TALKS=bundle, an https URL ending in "/" (or
 //                        http://localhost or http://127.0.0.1 for a local test). Falls back to CADDIE_BUNDLE_BASE, then
-//                        https://kurtlehnardt.github.io/conferenceCaddie/bundles/. Check cap1 compares the Worker's bundle_base with it.
+//                        https://kurtlehnardt.github.io/conferenceCaddie/bundles/. Check cap1 compares the Worker's (https) bundle_base with
+//                        SMOKE_CAPS_BUNDLE_BASE, else CADDIE_BUNDLE_BASE, else this when it is https, else the default.
 //   SMOKE_STRICT=1       count every first-attempt 5xx or network error (the NOTE lines) as a failure at
 //                        the end of the run, even when the retry passed. Default off.
 //   SMOKE_SKIP_EXTERNAL=1 skip the one GET of an unavailable conference's official schedule link.
@@ -98,6 +99,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { signAdminRequest, UsageError } from './lib/admin-sign.mjs';
+import { DEFAULT_BUNDLE_BASE } from '../worker/src/capabilities.js';
+import { primaryOver, emptyWindowSkip } from './lib/smoke-primary-over.mjs';
 import { isLoopbackHost } from './lib/loopback-host.mjs';
 import { MIN_UPCOMING, countUpcoming, pickUpcomingTopic } from './lib/smoke-topic-pick.mjs';
 import { validator } from '../contracts/js/schemas.mjs';
@@ -195,14 +198,19 @@ if (!['bundle', 'data'].includes(TALKS_FROM)) {
   console.log('FAIL config: SMOKE_TALKS must be bundle or data');
   process.exit(1);
 }
-// SMOKE_BUNDLE_BASE, then CADDIE_BUNDLE_BASE (the variable the deploy scripts read), then the default.
-// Check cap1 compares the Worker's advertised bundle_base with it, so a fork whose Worker sets its own
-// TALKS_BUNDLE_BASE passes when the smoke is given the same base.
+// The base the bundles are read from: SMOKE_BUNDLE_BASE, then CADDIE_BUNDLE_BASE (the repository variable that
+// pages.yml reads), then the default. Check cap1 expects what the Worker advertises, which is always https:
+// SMOKE_CAPS_BUNDLE_BASE, then CADDIE_BUNDLE_BASE, then SMOKE_BUNDLE_BASE when it is https, then the default.
+// So a fork whose Worker sets its own TALKS_BUNDLE_BASE passes when the smoke is given the same base, and an
+// http loopback SMOKE_BUNDLE_BASE does not make cap1 fail.
+const BUNDLE_BASE_VAR = process.env.SMOKE_BUNDLE_BASE ? 'SMOKE_BUNDLE_BASE' : process.env.CADDIE_BUNDLE_BASE ? 'CADDIE_BUNDLE_BASE' : 'SMOKE_BUNDLE_BASE';
 const BUNDLE_BASE_CONFIGURED = process.env.SMOKE_BUNDLE_BASE || process.env.CADDIE_BUNDLE_BASE || '';
-const BUNDLE_BASE = BUNDLE_BASE_CONFIGURED || 'https://kurtlehnardt.github.io/conferenceCaddie/bundles/';
+const BUNDLE_BASE = BUNDLE_BASE_CONFIGURED || DEFAULT_BUNDLE_BASE;
+const CAPS_BASE_VAR = process.env.SMOKE_CAPS_BUNDLE_BASE ? 'SMOKE_CAPS_BUNDLE_BASE' : process.env.CADDIE_BUNDLE_BASE ? 'CADDIE_BUNDLE_BASE' : /^https:/.test(process.env.SMOKE_BUNDLE_BASE || '') ? 'SMOKE_BUNDLE_BASE' : null;
+const CAPS_BASE = (CAPS_BASE_VAR && process.env[CAPS_BASE_VAR]) || DEFAULT_BUNDLE_BASE;
 // https, or plain http to this machine for a local test.
 if (TALKS_FROM === 'bundle' && !/^https:\/\/[^\s?#]+\/$/.test(BUNDLE_BASE) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/[^\s?#]*)?\/$/.test(BUNDLE_BASE)) {
-  console.log('FAIL config: SMOKE_BUNDLE_BASE must be an https URL that ends in "/"');
+  console.log(`FAIL config: ${BUNDLE_BASE_VAR} must be an https URL that ends in "/"`);
   process.exit(1);
 }
 
@@ -296,7 +304,7 @@ function report(ok, name, detail = '') {
   if (!ok) failures++;
   console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` (${detail})` : ''}`);
 }
-// No request of this script follows a redirect: one that carries a credential (the admin header, the device
+// No credentialed request follows a redirect: one that carries a credential (the admin header, the device
 // header, an Elasticsearch ApiKey) would hand it to whatever host the Location names. A redirect is a
 // failure that names the status, and the retry loops rethrow it. 304 is not one.
 class RedirectError extends Error {}
@@ -304,7 +312,7 @@ const isRedirect = (status) => [301, 302, 303, 307, 308].includes(status);
 async function failOnRedirect(res, what) {
   if (!isRedirect(res.status)) return;
   await res.body?.cancel();
-  throw new RedirectError(`${what} answered ${res.status}, a redirect; requests never follow redirects`);
+  throw new RedirectError(`${what} answered ${res.status}, a redirect; credentialed requests never follow redirects`);
 }
 function skip(name, why) {
   console.log(`SKIP ${name} (${why})`);
@@ -517,7 +525,7 @@ let fixturesGated = null;
 // the SKIP. SMOKE_TREAT_AS_REMOTE=1 is test-only: it makes a loopback API count as deployed, so the
 // loopback stub of test/smoke-admin-sign.test.mjs can exercise the SKIP path.
 const API_IS_LOOPBACK = process.env.SMOKE_TREAT_AS_REMOTE !== '1' && LOCAL_API;
-if (IS_WORKER && !API_IS_LOOPBACK && !BUNDLE_BASE_CONFIGURED) {
+if (IS_WORKER && !API_IS_LOOPBACK && !BUNDLE_BASE_CONFIGURED && !process.env.SMOKE_CAPS_BUNDLE_BASE) {
   console.log('NOTE the default bundle base is used against a remote API: a Worker with its own TALKS_BUNDLE_BASE needs SMOKE_BUNDLE_BASE set to it (cap1 and the bundle checks compare against it)');
 }
 if (process.env.SMOKE_TREAT_AS_REMOTE === '1') console.log('NOTE SMOKE_TREAT_AS_REMOTE=1: a loopback API counts as deployed');
@@ -732,7 +740,7 @@ if (!IS_WORKER) {
     const v = validator('capabilities.v1')(capsDoc, { closed: true });
     if (!v.valid) problems.push(`schema: ${v.errors.slice(0, 3).map((e) => `${e.path} ${e.message}`).join('; ')}`);
     if (capsDoc.tier !== 'free') problems.push(`tier ${capsDoc.tier}`);
-    if (capsDoc.talks?.bundle_base !== BUNDLE_BASE) problems.push(`bundle_base ${capsDoc.talks?.bundle_base}, the smoke expects ${BUNDLE_BASE} (set SMOKE_BUNDLE_BASE)`);
+    if (capsDoc.talks?.bundle_base !== CAPS_BASE) problems.push(`bundle_base ${capsDoc.talks?.bundle_base}, the smoke expects ${CAPS_BASE} (${CAPS_BASE_VAR ? `from ${CAPS_BASE_VAR}` : 'the default'}; set SMOKE_CAPS_BUNDLE_BASE or CADDIE_BUNDLE_BASE to the Worker's TALKS_BUNDLE_BASE)`);
     if (!/public/.test(res.headers.get('cache-control') ?? '') || !/max-age=300/.test(res.headers.get('cache-control') ?? '')) problems.push(`Cache-Control ${res.headers.get('cache-control')}`);
     if (res.headers.get('access-control-allow-origin') !== '*') problems.push(`Access-Control-Allow-Origin ${res.headers.get('access-control-allow-origin')}`);
     report(problems.length === 0, 'cap1: GET /api/capabilities serves a valid tier 2 document', problems.length ? problems.join('; ') : `closed-mode valid, ble.mode ${capsDoc.ble?.mode}, people.semantic ${capsDoc.people?.semantic}`);
@@ -1011,6 +1019,7 @@ await check('e1: include_events adds co-located events and showcases, and nothin
 // with end > now) have nothing to return for it, so the checks that need upcoming talks print SKIP
 // instead of failing on "no results" or passing vacuously.
 const PRIMARY_OVER_WHY = 'no talk of the primary conference is still to come (the server only suggests talks whose end is after now)';
+let primaryOverSkips = 0;
 function skipIfPrimaryOver(passed = '') {
   let talks;
   try {
@@ -1018,8 +1027,10 @@ function skipIfPrimaryOver(passed = '') {
   } catch {
     return; // the talks could not be loaded (a bundle that is down): run the check, do not couple it to Pages
   }
-  const now = Date.now();
-  if (talks.length && !talks.some((d) => Date.parse(d.end) > now)) throw new SkipCheck(`${passed}${PRIMARY_OVER_WHY}`);
+  if (primaryOver(talks, Date.now())) {
+    primaryOverSkips++;
+    throw new SkipCheck(`${passed}${PRIMARY_OVER_WHY}`);
+  }
 }
 
 await check('e2: include_events must be a boolean, and For you never holds an event', async () => {
@@ -1136,7 +1147,7 @@ await check('n2: Happening now keeps only talks in progress or starting within 6
   const expected = talks.filter((d) => Date.parse(d.end) > at + slack && Date.parse(d.start) < at + 60 * 60_000 - slack).length;
   // An empty window makes the bound vacuous. Skip only when the data agrees that none is in the window:
   // an empty answer where the data expects talks is the failure the check is for (total >= expected below).
-  if (r.json.total === 0 && expected === 0) throw new SkipCheck('the boolean check passed (400); no talk is in progress or starting within 60 minutes, so the window has nothing to check');
+  if (emptyWindowSkip(r.json.total, expected)) throw new SkipCheck('the boolean check passed (400); no talk is in progress or starting within 60 minutes, so the window has nothing to check');
   const ok = outside.length === 0 && r.json.total >= expected && r.json.total <= all.json.total && bad.status === 400;
   report(ok, 'n2: Happening now keeps only talks in progress or starting within 60 minutes, and must be a boolean', `${r.json.total} of ${all.json.total} talks, at least ${expected} expected from the data, ${outside.length} outside the window, bad type gave ${bad.status}`);
 });
@@ -1299,8 +1310,14 @@ await check('o: /api/schedule returns only that conference\'s talks, with no oth
 const stoplist = readFileSync(join(ROOT, 'config', 'topic-stoplist.txt'), 'utf8').split('\n').map((s) => s.trim().toLowerCase()).filter(Boolean);
 const topicsBySlug = new Map();
 for (const slug of [PRIMARY, ...EXTRA]) {
-  const { status, json } = await api('GET', `/api/topics?event=${encodeURIComponent(slug)}&size=150`);
-  topicsBySlug.set(slug, status === 200 ? json.topics ?? [] : []);
+  try {
+    const { status, json } = await api('GET', `/api/topics?event=${encodeURIComponent(slug)}&size=150`);
+    topicsBySlug.set(slug, status === 200 ? json.topics ?? [] : []);
+  } catch (err) {
+    if (!(err instanceof RedirectError)) throw err;
+    report(false, `topics: ${slug} lists its topics`, err.message);
+    topicsBySlug.set(slug, []);
+  }
 }
 
 await check('t: the topic list has Kubernetes, eBPF, a two-word topic and no filler', async () => {
@@ -1408,7 +1425,10 @@ async function indexCounts() {
     headers: { Authorization: `ApiKey ${process.env.ELASTISEARCH_API_KEY}` },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`index listing gave ${res.status}`);
+  if (!res.ok) {
+    await res.body?.cancel();
+    throw new Error(`index listing gave ${res.status}`);
+  }
   const rows = await res.json();
   return new Map(rows.filter((r) => !r.index.startsWith('.') && !r.index.startsWith('caddie-people')).map((r) => [r.index, r['docs.count']]));
 }
@@ -2199,10 +2219,10 @@ try {
     }
     const topic = pickUpcomingTopic(candidates);
     if (!topic) throw new SkipCheck(`none of the first 12 topics has ${MIN_UPCOMING} or more talks that have not ended`);
-    const first = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [topic.topic_id], interested_talk_ids: [], size: 20 }, { label: 'recs' });
+    const first = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [topic.topic_id], interests: topic.label, interested_talk_ids: [], size: 20 }, { label: 'recs' });
     if (first.status !== 200) throw new Error(`status ${first.status}`);
     const marked = (first.json.results ?? []).slice(0, 2).map((r) => r.talk_id);
-    const second = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [topic.topic_id], interested_talk_ids: marked, size: 50 }, { label: 'recs' });
+    const second = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [topic.topic_id], interests: topic.label, interested_talk_ids: marked, size: 50 }, { label: 'recs' });
     const chips = await api('POST', '/api/recommendations', { event: PRIMARY, learn_topics: [topic.topic_id], interested_talk_ids: marked, size: 50 }, { label: 'recs' });
     const results = second.json.results ?? [];
     const now = Date.now();
@@ -2812,6 +2832,7 @@ if (!WORKER_SERVES_APP) {
   }
 }
 
+if (primaryOverSkips > 0) console.log(`NOTE ${primaryOverSkips} check${primaryOverSkips === 1 ? '' : 's'} skipped because every talk of the primary conference has ended; set SMOKE_CONFERENCE to a conference that is still running to run them`);
 if (process.env.SMOKE_STRICT === '1') {
   report(retried === 0, 'strict: no request answered 5xx or failed on its first attempt', retried ? `${retried} did; see the NOTE lines above` : 'none needed a retry');
 }

@@ -264,7 +264,7 @@ test('gated fixtures FAIL with the .dev.vars hint against a loopback API, and SK
   }
 });
 
-// A redirect on a device-header request (api()) is never followed either: the target is never called and
+// A redirect on an API request (api(); the stub redirects /api/search) is never followed either: the target is never called and
 // the check FAILs naming 302.
 test('a 302 on an API request is a FAIL naming 302, never followed or retried', async () => {
   const other = await stubWorker({ authOk: () => true });
@@ -324,9 +324,17 @@ describe('cap1 and the configured bundle base', { timeout: 120_000 }, () => {
     const r = await run(OWN, { CADDIE_BUNDLE_BASE: OWN });
     assert.ok(r.cap1?.startsWith('PASS cap1:'), r.cap1);
   });
-  test('SMOKE_BUNDLE_BASE wins over CADDIE_BUNDLE_BASE', async () => {
-    const r = await run(OWN, { SMOKE_BUNDLE_BASE: OWN, CADDIE_BUNDLE_BASE: OTHER });
+  test('cap1 order: SMOKE_CAPS_BUNDLE_BASE, then CADDIE_BUNDLE_BASE, then an https SMOKE_BUNDLE_BASE', async () => {
+    const a = await run(OWN, { SMOKE_CAPS_BUNDLE_BASE: OWN, CADDIE_BUNDLE_BASE: OTHER, SMOKE_BUNDLE_BASE: OTHER });
+    assert.ok(a.cap1?.startsWith('PASS cap1:'), a.cap1);
+    const b = await run(OWN, { CADDIE_BUNDLE_BASE: OWN, SMOKE_BUNDLE_BASE: OTHER });
+    assert.ok(b.cap1?.startsWith('PASS cap1:'), b.cap1);
+  });
+  test('an http loopback SMOKE_BUNDLE_BASE does not make cap1 fail: the Worker advertises https', async () => {
+    const r = await run(DEFAULT, { SMOKE_BUNDLE_BASE: 'http://127.0.0.1:9/bundles/' });
     assert.ok(r.cap1?.startsWith('PASS cap1:'), r.cap1);
+    const caps = await run(OWN, { SMOKE_BUNDLE_BASE: 'http://127.0.0.1:9/bundles/', SMOKE_CAPS_BUNDLE_BASE: OWN });
+    assert.ok(caps.cap1?.startsWith('PASS cap1:'), caps.cap1);
   });
   test('a base that differs from the Worker\'s FAILs cap1 naming bundle_base', async () => {
     const r = await run(OWN, { SMOKE_BUNDLE_BASE: OTHER });
@@ -336,7 +344,7 @@ describe('cap1 and the configured bundle base', { timeout: 120_000 }, () => {
     const r = await run(DEFAULT, {});
     assert.ok(r.cap1?.startsWith('PASS cap1:'), r.cap1);
     const fork = await run(OWN, {});
-    assert.ok(fork.cap1?.startsWith('FAIL cap1:') && fork.cap1.includes('SMOKE_BUNDLE_BASE'), fork.cap1);
+    assert.ok(fork.cap1?.startsWith('FAIL cap1:') && fork.cap1.includes('SMOKE_CAPS_BUNDLE_BASE'), fork.cap1);
   });
   test('the default base against a remote API prints one NOTE naming SMOKE_BUNDLE_BASE; a configured base prints none', async () => {
     const note = (r) => r.lines.filter((l) => l.startsWith('NOTE the default bundle base is used against a remote API'));
