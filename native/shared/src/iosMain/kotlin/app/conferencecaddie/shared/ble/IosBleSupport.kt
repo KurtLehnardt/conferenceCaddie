@@ -141,6 +141,10 @@ internal fun connectableOf(advertisementData: Map<Any?, *>): Boolean = when (val
  *   the service is not asked again until the next one.
  * - At most [maxPerMinute] connections start in any 60 seconds, so a crowd of iPhones costs a
  *   bounded amount of radio time and battery.
+ * - A phone this radio connects to can read this phone's Bluetooth name over that connection, so
+ *   it must not also be served this phone's token, which would tie the name to the token: every
+ *   phone connected to in the current window is remembered, through a refresh too, and
+ *   [mayServe] says no to it as a central.
  *
  * [P] is the peripheral (a CBPeripheral in the app), kept here so the radio holds a strong
  * reference to every phone it is about to connect to.
@@ -167,6 +171,10 @@ internal class GattReads<P>(
 
     private var window = -1L
     private val read = HashSet<String>()
+
+    // The phones connected to (or tried) in this window. Unlike [read], a refresh keeps them: a new
+    // key does not make a phone that could read this phone's name over its connection a stranger.
+    private val connectedTo = HashSet<String>()
     private val pending = ArrayDeque<Candidate<P>>()
     private val started = ArrayDeque<Long>()
 
@@ -183,6 +191,7 @@ internal class GattReads<P>(
         if (w != window) {
             window = w
             read.clear()
+            connectedTo.clear()
         }
     }
 
@@ -191,6 +200,19 @@ internal class GattReads<P>(
 
     /** True when [id] was read (or tried) in the current window. */
     fun wasRead(id: String): Boolean = id in read
+
+    /**
+     * False when the central [id] asking to read this phone's token at [nowMillis] is a phone this
+     * radio is reading now or connected to earlier in that window. Core Bluetooth names a remote
+     * device by the same identifier whether it shows up as a peripheral or as a central (both are a
+     * `CBPeer`), so the peripheral's identifier stands for the central here. Such a phone can read
+     * this phone's Bluetooth name over the connection this phone opened; serving it the token too
+     * would tie the name to the token.
+     */
+    fun mayServe(id: String, nowMillis: Long): Boolean {
+        roll(nowMillis)
+        return current?.id != id && id !in connectedTo
+    }
 
     /**
      * Offers a phone heard without service data. False when it was read in this window, is being
@@ -223,6 +245,7 @@ internal class GattReads<P>(
         current = candidate
         started.addLast(nowMillis)
         read += candidate.id
+        connectedTo += candidate.id
         return Next.Start(candidate)
     }
 
@@ -230,8 +253,9 @@ internal class GattReads<P>(
     fun finish(): Candidate<P>? = current.also { current = null }
 
     /**
-     * Drops the waiting phones and the current read (the radio stopped). The window's reads and the
-     * connections of the last minute are kept, so stopping and starting again does not lift the cap.
+     * Drops the waiting phones and the current read (the radio stopped). The window's reads, the
+     * phones connected to and the connections of the last minute are kept, so stopping and starting
+     * again lifts neither the cap nor a refusal.
      */
     fun clear(): Candidate<P>? {
         pending.clear()
@@ -310,38 +334,66 @@ internal fun tickDelayMillis(
 }
 
 /**
- * The token window each central (by its Core Bluetooth identifier) was first served in, so that no
- * central can read this phone's tokens of two windows and link them (docs/contracts/ble-tokens.md:
- * the tokens of one phone must not be linkable across windows). Used on the radio's queue only.
+ * What each central (by its Core Bluetooth identifier) was served, so that no central can read this
+ * phone's tokens of two windows, or of two keys, and link them (docs/contracts/ble-tokens.md: the
+ * tokens of one phone must not be linkable across windows). Used on the radio's queue only.
  *
- * A central is served in the window of its first read and refused in every later window, for the
- * rest of the radio's session; [clear] forgets them all when the radio stops. Forgetting them at
- * each window change instead would not be enough: a central that holds its connection open across
- * the change would be served once in window w, then once more in w + 1 after the reset, which is
- * the very link to prevent. A phone that connects again under a new random address has a new
- * identifier and is served again; one whose address outlives a window waits for its next address.
- * At most [cap] centrals are remembered, the one seen least recently making room.
+ * A central is served one payload only: the one of its first read, in that window. A read in the
+ * next window, or after a re-key within the same window, would hand it a second token, so it is
+ * refused (`CBATTErrorReadNotPermitted`); a connection held open across a window change therefore
+ * gets nothing more. The payload stands for the window and the key version together (it changes
+ * exactly when one of them does), and comparing it rather than a version the radio would have to
+ * read apart from the payload leaves no moment in which the two disagree.
+ *
+ * Only the current window and the one before are remembered: once a central's first read is two
+ * windows old it is forgotten and served again, like a stranger. Remembering it for the whole
+ * session would turn the refusal itself into an oracle that tells a central "you have read this
+ * phone before" for as long as the session runs, and would keep a record of every phone met. A
+ * phone that connects again under a new random address has a new identifier anyway. At most [cap]
+ * centrals are remembered, the one seen least recently making room; [clear] forgets them all when
+ * the radio stops.
  */
 internal class CentralReadWindows(private val cap: Int = MAX_CENTRALS_REMEMBERED) {
+    private class Served(val window: Long, val payload: ByteArray)
+
     // In the order they were last seen, oldest first.
-    private val firstWindow = LinkedHashMap<String, Long>()
+    private val served = LinkedHashMap<String, Served>()
+
+    // The latest window a read came in, so that older entries are dropped once per window change.
+    private var latest = Long.MIN_VALUE
 
     /** The number of centrals remembered. */
-    val size: Int get() = firstWindow.size
+    val size: Int get() = served.size
 
     /**
-     * True when the central [id] may be served a read in window [w]: it was never served, or was
-     * first served in [w]. Either way it counts as seen now.
+     * True when the central [id] may be served [payload], this phone's payload of window [w]: it is
+     * not remembered (never served, or first served two or more windows ago), or it was first
+     * served this very payload in [w]. Either way it counts as seen now.
      */
-    fun allow(id: String, w: Long): Boolean {
-        val first = firstWindow.remove(id)
-        if (first == null && firstWindow.size >= cap) firstWindow.remove(firstWindow.keys.first())
-        firstWindow[id] = first ?: w
-        return first == null || first == w
+    fun allow(id: String, w: Long, payload: ByteArray): Boolean {
+        forgetBefore(w - 1)
+        val before = served.remove(id)
+        if (before == null || before.window < w - 1) {
+            if (served.size >= cap) served.remove(served.keys.first())
+            served[id] = Served(w, payload.copyOf())
+            return true
+        }
+        served[id] = before
+        return before.window == w && before.payload.contentEquals(payload)
+    }
+
+    // Drops the centrals first served before [window], when the windows have moved on.
+    private fun forgetBefore(window: Long) {
+        if (window + 1 <= latest) return
+        latest = window + 1
+        served.entries.removeAll { it.value.window < window }
     }
 
     /** Forgets every central (the radio stopped). */
-    fun clear() = firstWindow.clear()
+    fun clear() {
+        served.clear()
+        latest = Long.MIN_VALUE
+    }
 }
 
 /** Centrals [CentralReadWindows] remembers per radio session, at most. */

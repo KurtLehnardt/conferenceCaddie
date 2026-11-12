@@ -54,9 +54,11 @@ import platform.darwin.dispatch_walltime
  *   holds the service UUID only: iOS cannot advertise service data, and in the background it moves
  *   the UUID to the overflow area, which only iPhones scanning for it can see. Nothing in the
  *   advertisement depends on the token, so [refresh] has nothing to re-advertise; the address is
- *   iOS's own, rotated on its own schedule. Each central is served the token of one window only,
- *   the window of its first read, for the rest of the radio's session ([CentralReadWindows]), so a
- *   connection held open across a window change cannot link two tokens.
+ *   iOS's own, rotated on its own schedule. Each central is served one payload only, the one of
+ *   its first read ([CentralReadWindows]), so a connection held open across a window change or a
+ *   re-key cannot link two tokens; a central is forgotten two windows after that read. A phone this
+ *   radio connected to in the current window is never served ([GattReads.mayServe]), since it
+ *   could read this phone's Bluetooth name over that connection.
  * - **Scanning.** A central manager scans for the service UUID. An advertisement with service data
  *   for it (an Android phone's extended advertisement) is handed to the runtime as heard. Any
  *   other phone at or above [BleRadioConfig.nearRssi] is connected to and its characteristic read,
@@ -126,7 +128,7 @@ class IosBleRadio internal constructor(
     /** Relaunched by iOS for Bluetooth, and the runtime has not started the radio yet: the reads held meanwhile. */
     private val gate = RestoreGate<Pair<CBPeripheralManager, CBATTRequest>>({ millis, block -> after(millis, block) })
 
-    /** The window each central was first served in, so no central links two windows' tokens. */
+    /** The payload each central was served, so no central links two tokens. */
     private val centralWindows = CentralReadWindows()
     private val heldDiscoveries = HeldDiscoveries<Discovery>()
     private val reads = GattReads<CBPeripheral>()
@@ -513,12 +515,10 @@ class IosBleRadio internal constructor(
             answer(pm, request, answerRead(null, 0))
             return
         }
-        // One window per central for the whole session (CentralReadWindows): a central that keeps
-        // its connection open, or comes back under the same identifier, after the window changed is
-        // refused, so it cannot read two windows' tokens and link them. The reviewer suggested
-        // forgetting the centrals at each window change; that would still serve a held connection
-        // once in w and once in w + 1, so the identifiers are kept until the radio stops instead.
-        if (!centralWindows.allow(request.central.identifier.UUIDString, BleProtocol.windowAtMillis(now))) {
+        val centralId = request.central.identifier.UUIDString
+        // A phone this one is reading, or read earlier in this window, could read this phone's
+        // Bluetooth name over the connection this phone opened, so it gets no token (GattReads.mayServe).
+        if (!reads.mayServe(centralId, now)) {
             pm.respondToRequest(request, CBATTErrorReadNotPermitted)
             return
         }
@@ -526,6 +526,17 @@ class IosBleRadio internal constructor(
             source?.payloadNow()
         } catch (e: Exception) {
             null
+        }
+        if (payload == null) {
+            answer(pm, request, answerRead(null, 0))
+            return
+        }
+        // One payload per central (CentralReadWindows): a central that keeps its connection open
+        // across a window change, or reads again after a re-key, is refused, so it cannot read two
+        // tokens and link them. Centrals are forgotten two windows after their first read.
+        if (!centralWindows.allow(centralId, BleProtocol.windowAtMillis(now), payload)) {
+            pm.respondToRequest(request, CBATTErrorReadNotPermitted)
+            return
         }
         answer(pm, request, answerRead(payload, request.offset.toLong()))
     }

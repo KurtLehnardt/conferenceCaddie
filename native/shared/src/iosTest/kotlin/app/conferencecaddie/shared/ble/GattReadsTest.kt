@@ -43,6 +43,27 @@ class GattReadsTest {
     }
 
     @Test
+    fun aPhoneBeingReadOrReadInTheWindowIsNotServedThisPhonesToken() {
+        val reads = GattReads<String>()
+        assertTrue(reads.mayServe("a", t0), "a stranger is served")
+        reads.offer(candidate("a"))
+        assertTrue(reads.mayServe("a", t0), "only waiting: no connection yet")
+        assertEquals("a", reads.started(t0))
+        // Connected to it: it could read this phone's Bluetooth name over that connection.
+        assertFalse(reads.mayServe("a", t0 + 1_000), "while it is read")
+        reads.finish()
+        assertFalse(reads.mayServe("a", t0 + 2_000), "after the read, in the same window")
+        reads.resetWindow()
+        assertFalse(reads.mayServe("a", t0 + 3_000), "a refresh (a re-key) does not make it a stranger")
+        reads.clear()
+        assertFalse(reads.mayServe("a", t0 + 4_000), "nor does stopping the radio")
+        assertTrue(reads.mayServe("b", t0 + 4_000), "another phone is served")
+        // The next window: a phone not connected to in it is served again.
+        val nextWindow = BleProtocol.windowStartMillis(2990521) + 1_000
+        assertTrue(reads.mayServe("a", nextWindow))
+    }
+
+    @Test
     fun oneReadAtATime() {
         val reads = GattReads<String>()
         reads.offer(candidate("a"))

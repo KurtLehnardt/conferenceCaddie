@@ -8,9 +8,12 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
+import platform.CoreBluetooth.CBManagerAuthorizationAllowedAlways
+import platform.CoreBluetooth.CBManagerAuthorizationDenied
+import platform.CoreBluetooth.CBManagerAuthorizationNotDetermined
 
 /**
- * The iOS radio's guards, apart from Core Bluetooth: one window per central for its reads
+ * The iOS radio's guards, apart from Core Bluetooth: one payload per central for its reads
  * ([CentralReadWindows]), the gate that holds reads after a relaunch ([RestoreGate]) and the time
  * limit on the Bluetooth prompt ([awaitAccessDecision]).
  */
@@ -37,27 +40,53 @@ class IosBleGuardsTest {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // One window per central
+    // One payload per central
+
+    private fun payload(seed: Int) = ByteArray(17) { i -> (seed * 31 + i).toByte() }
 
     @Test
-    fun aCentralIsServedInTheWindowOfItsFirstReadOnly() {
+    fun aCentralIsServedThePayloadOfItsFirstReadOnly() {
         val windows = CentralReadWindows()
         val w = 2_990_520L
-        assertTrue(windows.allow("central-a", w))
-        assertTrue(windows.allow("central-a", w), "again in the same window (a long read, a retry)")
-        // A connection held open across the change, or the same identifier back later: refused.
-        assertFalse(windows.allow("central-a", w + 1))
-        assertFalse(windows.allow("central-a", w + 2))
-        assertFalse(windows.allow("central-a", w - 1), "an earlier window too (a clock set back)")
+        assertTrue(windows.allow("central-a", w, payload(1)))
+        assertTrue(windows.allow("central-a", w, payload(1)), "again in the same window (a long read, a retry)")
+        // A connection held open across the change: refused for the rest of the next window.
+        assertFalse(windows.allow("central-a", w + 1, payload(2)))
+        assertFalse(windows.allow("central-a", w + 1, payload(2)), "still refused")
+        assertFalse(windows.allow("central-a", w - 1, payload(0)), "an earlier window too (a clock set back)")
+    }
+
+    @Test
+    fun aReKeyWithinTheWindowIsNotServedToACentralThatReadTheOldKey() {
+        val windows = CentralReadWindows()
+        val w = 2_990_520L
+        assertTrue(windows.allow("central-a", w, payload(1)), "the token of key version 1")
+        assertFalse(windows.allow("central-a", w, payload(9)), "the token of key version 2, same window: refused")
+        assertTrue(windows.allow("central-b", w, payload(9)), "a central that never read is served the new one")
+    }
+
+    @Test
+    fun onlyTheCurrentAndThePreviousWindowAreRemembered() {
+        val windows = CentralReadWindows()
+        val w = 2_990_520L
+        windows.allow("central-a", w, payload(1))
+        windows.allow("central-b", w + 1, payload(2))
+        assertEquals(2, windows.size)
+        // Two windows after its first read, a central is a stranger again: no session-long record,
+        // and no refusal that tells it this phone was met before.
+        assertTrue(windows.allow("central-a", w + 2, payload(3)))
+        assertFalse(windows.allow("central-b", w + 2, payload(3)), "first served in the window before: still refused")
+        windows.allow("central-c", w + 4, payload(5))
+        assertEquals(1, windows.size, "the entries older than the window before are gone")
     }
 
     @Test
     fun anotherCentralIsServedInItsOwnWindow() {
         val windows = CentralReadWindows()
         val w = 2_990_520L
-        assertTrue(windows.allow("central-a", w))
-        assertTrue(windows.allow("central-b", w + 1), "a phone under a new address is a new central")
-        assertFalse(windows.allow("central-a", w + 1))
+        assertTrue(windows.allow("central-a", w, payload(1)))
+        assertTrue(windows.allow("central-b", w + 1, payload(2)), "a phone under a new address is a new central")
+        assertFalse(windows.allow("central-a", w + 1, payload(2)))
         assertEquals(2, windows.size)
     }
 
@@ -66,18 +95,18 @@ class IosBleGuardsTest {
         assertEquals(1024, MAX_CENTRALS_REMEMBERED)
         val windows = CentralReadWindows(cap = 3)
         val w = 2_990_520L
-        windows.allow("a", w)
-        windows.allow("b", w)
-        windows.allow("c", w)
+        windows.allow("a", w, payload(1))
+        windows.allow("b", w, payload(1))
+        windows.allow("c", w, payload(1))
         // "a" seen again, so "b" is now the least recently seen.
-        windows.allow("a", w)
-        windows.allow("d", w)
+        windows.allow("a", w, payload(1))
+        windows.allow("d", w, payload(1))
         assertEquals(3, windows.size)
-        assertFalse(windows.allow("a", w + 1), "still remembered")
-        assertTrue(windows.allow("b", w + 1), "forgotten to make room")
+        assertFalse(windows.allow("a", w + 1, payload(2)), "still remembered")
+        assertTrue(windows.allow("b", w + 1, payload(2)), "forgotten to make room")
 
         val full = CentralReadWindows()
-        for (i in 0 until 1_100) full.allow("central-$i", w)
+        for (i in 0 until 1_100) full.allow("central-$i", w, payload(1))
         assertEquals(MAX_CENTRALS_REMEMBERED, full.size)
     }
 
@@ -85,10 +114,10 @@ class IosBleGuardsTest {
     fun aStopForgetsEveryCentral() {
         val windows = CentralReadWindows()
         val w = 2_990_520L
-        windows.allow("central-a", w)
+        windows.allow("central-a", w, payload(1))
         windows.clear()
         assertEquals(0, windows.size)
-        assertTrue(windows.allow("central-a", w + 1), "a new session serves it again")
+        assertTrue(windows.allow("central-a", w + 1, payload(2)), "a new session serves it again")
     }
 
     // ---------------------------------------------------------------------------------------------
