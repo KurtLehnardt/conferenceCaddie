@@ -2,8 +2,12 @@ package app.conferencecaddie.shared.people
 
 import app.conferencecaddie.shared.ble.BlePermissionKind
 import app.conferencecaddie.shared.bundle.TalkBundle
+import app.conferencecaddie.shared.bundle.TalkTime
 import kotlin.math.ceil
 import kotlin.math.max
+import kotlin.time.Instant
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 
 /**
  * The words and pure helpers of the people features that the web app keeps in its logic files
@@ -19,6 +23,19 @@ object PeopleText {
     const val POSITION_LABEL = "Use my position too (optional)"
     const val POSITION_EXPLAINER =
         "Ranks people near you higher and, once you've both agreed to meet, shows how far apart you are. Nobody else ever sees your position, and it's never stored after."
+
+    /**
+     * Native: a toast when a Bluetooth presence write (turning Bluetooth on or off, or a re-key)
+     * moved the end of presence, since the server restarts the hour on every presence write. The
+     * time is the device's clock time, as "People features are paused until 3:00 PM." writes it.
+     */
+    fun presenceRunsUntil(untilMs: Long, zone: TimeZone): String = "Being around now runs until ${clockTime(untilMs, zone)}."
+
+    /** "3:42 PM": the clock time of [ms] in [zone]. */
+    fun clockTime(ms: Long, zone: TimeZone): String {
+        val local = Instant.fromEpochMilliseconds(ms).toLocalDateTime(zone)
+        return TalkTime.time(local.hour * 60 + local.minute)
+    }
 
     /** The labels of the two presence modes. */
     val DURATION_LABELS: Map<PresenceMode, String> = mapOf(PresenceMode.Hour to "For an hour", PresenceMode.Day to "Until I turn it off today")

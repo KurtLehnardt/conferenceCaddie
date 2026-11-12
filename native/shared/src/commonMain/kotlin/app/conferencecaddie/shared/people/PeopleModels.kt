@@ -112,6 +112,27 @@ enum class PresenceMode {
 }
 
 /**
+ * A presence write's `until`: a mode, which restarts presence's end on the server ([PresenceMode]),
+ * or `keep`, which keeps the `presence_until` the server holds, on a backend whose capabilities say
+ * `presence.keep_until` ([app.conferencecaddie.shared.Capabilities.Presence.keepUntil]).
+ */
+@Serializable
+enum class PresenceUntil {
+    @SerialName("hour") Hour,
+    @SerialName("day") Day,
+    @SerialName("keep") Keep,
+    ;
+
+    companion object {
+        /** The `until` that asks for [mode]. */
+        fun of(mode: PresenceMode): PresenceUntil = when (mode) {
+            PresenceMode.Hour -> Hour
+            PresenceMode.Day -> Day
+        }
+    }
+}
+
+/**
  * How close someone who is around is, as a band only: the same zone, the same ~100 m cell, cells
  * under 300 m apart, or just the venue. Never a distance.
  */
@@ -334,7 +355,7 @@ data class PresencePutRequest(
     val zone: String,
     val spot: Opt<String> = Opt.Absent,
     val location: Opt<PresenceLocation> = Opt.Absent,
-    val until: Opt<PresenceMode> = Opt.Absent,
+    val until: Opt<PresenceUntil> = Opt.Absent,
     /** true starts Bluetooth proximity, false stops it, null (absent) leaves it as it is. */
     val ble: Boolean? = null,
 )
@@ -358,6 +379,7 @@ data class PresencePutResponse(
     val zone: String = "",
     val spot: String? = null,
     @SerialName("spot_hidden") val spotHidden: Boolean = false,
+    /** The mode the server holds; anything else (a `keep` echoed back, say) reads as null. */
     val until: PresenceMode? = null,
     @SerialName("presence_since") val presenceSince: String? = null,
     @SerialName("presence_until") val presenceUntil: String? = null,

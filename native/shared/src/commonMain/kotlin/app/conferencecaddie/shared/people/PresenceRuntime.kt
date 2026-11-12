@@ -14,6 +14,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.datetime.TimeZone
 
 /** What [PeopleController.sharePosition] ended with. */
 enum class PositionOutcome {
@@ -37,7 +38,19 @@ internal interface PresenceHost {
     val location: LocationProvider
     val pace: Pace
 
+    /** The device's time zone, for the clock time of a toast. */
+    val timeZone: TimeZone
+
     fun changed()
+
+    /** A message for a toast ([PeopleUiState.notice]). */
+    fun notice(message: String)
+
+    /**
+     * True when the backend keeps the `presence_until` it holds on a write with `until: "keep"`
+     * (capabilities `presence.keep_until`), so a Bluetooth write need not move the end of presence.
+     */
+    fun keepUntil(): Boolean
 
     /** True while the app is in the foreground. */
     fun foreground(): Boolean
@@ -129,9 +142,18 @@ internal class PresenceRuntime(
 
     /**
      * The presence write the web sends: `{ event, zone, spot }`, plus the position when there is one,
-     * `until` when it is not the hour, and `ble` when Bluetooth is switched (phase 4).
+     * `until` when it is not the hour, and `ble` when Bluetooth is switched (phase 4). With [keep],
+     * `until` is `"keep"`, so the server keeps the `presence_until` it holds instead of the mode's.
      */
-    private suspend fun putPresence(slug: String, zone: String, spot: String, fix: GeoFix?, mode: PresenceMode, ble: Boolean? = null): ApiResult<PresencePutResponse> {
+    private suspend fun putPresence(
+        slug: String,
+        zone: String,
+        spot: String,
+        fix: GeoFix?,
+        mode: PresenceMode,
+        ble: Boolean? = null,
+        keep: Boolean = false,
+    ): ApiResult<PresencePutResponse> {
         if (store.deleteCovers(slug)) return ApiResult.Failed(PeopleError.deleteUnfinished())
         return api.putPresence(
             PresencePutRequest(
@@ -139,7 +161,11 @@ internal class PresenceRuntime(
                 zone = zone,
                 spot = Opt.Of(spot.trim().take(SPOT_MAX)),
                 location = if (fix != null) Opt.Of(PresenceLocation(fix.lat, fix.lon, fix.accuracyM.roundToLong())) else Opt.Absent,
-                until = if (mode != PresenceMode.Hour) Opt.Of(mode) else Opt.Absent,
+                until = when {
+                    keep -> Opt.Of(PresenceUntil.Keep)
+                    mode != PresenceMode.Hour -> Opt.Of(PresenceUntil.of(mode))
+                    else -> Opt.Absent
+                },
                 ble = ble,
             ),
         )
@@ -277,10 +303,12 @@ internal class PresenceRuntime(
      * returns null, sending nothing, when presence is off by the time its turn comes.
      *
      * The server restarts presence's hour (or renews the day) on every presence write, `ble` or not,
-     * and cannot be asked to keep the old `presence_until`. So, as [turnOn] does, the device takes
-     * the `presence_until` the answer names, with the spot line's state, and its expiry and the
-     * radio's deadline follow it: otherwise the person would stay visible, and their tokens
-     * resolvable, for up to an hour after the device says presence ended.
+     * unless the backend offers `presence.keep_until` ([PresenceHost.keepUntil]): then the write
+     * says `until: "keep"` and the server keeps the `presence_until` it holds. Either way, as
+     * [turnOn] does, the device takes the `presence_until` the answer names, with the spot line's
+     * state, and its expiry and the radio's deadline follow it: otherwise the person would stay
+     * visible, and their tokens resolvable, for up to an hour after the device says presence ended.
+     * When that moves the end of presence to another minute, a toast says until when it now runs.
      */
     suspend fun writeBle(slug: String, ble: Boolean): ApiResult<PresencePutResponse>? {
         val started = epoch
@@ -288,7 +316,7 @@ internal class PresenceRuntime(
             val p = get(slug)
             val zone = p.zone
             if (!p.on || zone == null) return@presenceWrite null
-            putPresence(slug, zone, p.spot, if (p.position) serverFixes[slug] else null, p.mode, ble)
+            putPresence(slug, zone, p.spot, if (p.position) serverFixes[slug] else null, p.mode, ble, keep = host.keepUntil())
         }
         if (r is ApiResult.Ok) followWrite(slug, r.value, started)
         return r
@@ -296,13 +324,20 @@ internal class PresenceRuntime(
 
     // A write that repeated presence went through: the device keeps the until and the spot line's
     // state the server now holds. Presence turned off (or ended on the server) while the write was
-    // under way stays off: the delete queued behind it has the last word.
+    // under way stays off: the delete queued behind it has the last word. An end that moved to
+    // another clock minute is told, so the person knows presence now runs longer than they chose.
     private suspend fun followWrite(slug: String, res: PresencePutResponse, started: Int) {
-        if (epoch != started || !get(slug).on) return
+        val before = get(slug)
+        if (epoch != started || !before.on) return
         val until = untilOf(res)
         set(slug) { p -> if (p.on) p.copy(until = until, spotHidden = res.spotHidden, held = res.held) else p }
         if (watchedSlug == slug) scheduleExpiry(slug)
         host.presenceChanged(slug)
+        val beforeMs = before.until?.let { IsoTime.epochMillis(it) } ?: return
+        val afterMs = IsoTime.epochMillis(until) ?: return
+        if (!get(slug).on) return
+        val text = PeopleText.presenceRunsUntil(afterMs, host.timeZone)
+        if (text != PeopleText.presenceRunsUntil(beforeMs, host.timeZone)) host.notice(text)
     }
 
     /**
@@ -536,8 +571,10 @@ internal class PresenceRuntime(
         }
     }
 
-    // Sends the newest fix with the current zone and spot. The server extends presence_until on
-    // every write, but the device keeps its own hour, so the switch still goes off on time.
+    // Sends the newest fix with the current zone and spot. The server restarts presence_until on
+    // every write, this one included, but unlike a Bluetooth write (writeBle) this one does not
+    // move the device's until: the device keeps its own hour, and when that runs out its expiry
+    // turns presence off with a delete, which ends it on the server too.
     private suspend fun sendFix(slug: String) {
         sendJob?.cancel()
         sendJob = null

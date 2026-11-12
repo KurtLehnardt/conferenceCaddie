@@ -975,6 +975,10 @@ class PeopleController(
 
         override suspend fun writePresenceBle(slug: String, ble: Boolean): ApiResult<PresencePutResponse>? = presenceRuntime.writeBle(slug, ble)
 
+        override suspend fun endPresence(slug: String) = presenceRuntime.turnOff(slug)
+
+        override fun keepUntil(): Boolean = context?.takeIf { it.backend == backend }?.capabilities?.presence?.keepUntil == true
+
         override fun isBlocked(slug: String, ref: String): Boolean = connect.isBlocked(slug, ref)
 
         override fun nudgedToday(slug: String, ref: String): Boolean = connect.wasNudgedToday(slug, ref)
@@ -983,7 +987,8 @@ class PeopleController(
 
         override fun reveal(slug: String, ref: String) = connect.requestReveal(slug, ref)
 
-        // Bluetooth's toasts are about the radio, never about the profile, so they offer no "Open profile".
+        // The toasts of Bluetooth and presence are about the radio or about being around, never
+        // about the profile, so they offer no "Open profile".
         override fun notice(message: String) {
             if (session === this) setNotice(message, opensProfile = false)
         }

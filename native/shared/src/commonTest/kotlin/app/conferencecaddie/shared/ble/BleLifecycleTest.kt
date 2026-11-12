@@ -9,6 +9,7 @@ import app.conferencecaddie.shared.people.ConferenceInfo
 import app.conferencecaddie.shared.people.PEOPLE_ON
 import app.conferencecaddie.shared.people.PeopleController
 import app.conferencecaddie.shared.people.PeopleText
+import app.conferencecaddie.shared.people.PresenceMode
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -368,7 +369,7 @@ class BleLifecycleTest {
     }
 
     @Test
-    fun aRestartAfterThePersonStoppedTheAppTurnsItOffAndTellsTheServer() = runTest {
+    fun aRestartAfterThePersonStoppedTheAppEndsHourModePresence() = runTest {
         val b = BleRig(this)
         b.on()
         // Everything would let it resume: presence, the key, the permission, the radio.
@@ -380,10 +381,31 @@ class BleLifecycleTest {
         assertTrue(b.keys.aliases.isEmpty())
         assertFalse(c.state.value.ble.on)
         assertNull(c.state.value.ble.problem, "the person's own off: nothing to explain")
-        assertEquals(listOf("""{"event":"${b.slug}","zone":"Hallway","spot":"Green jacket","ble":false}"""), b.presencePuts().map { it.body })
-        assertTrue(c.state.value.presence.on, "presence stays on")
+        // Bluetooth was what kept hour-mode presence on in the pocket: presence ends with it, on the
+        // device and with a delete, and no ble: false write goes before it.
+        assertTrue(b.presencePuts().isEmpty())
+        assertEquals(1, b.h.sent("DELETE", "/api/presence").size)
+        assertFalse(c.state.value.presence.on, "presence ended")
         assertEquals(1, radio.userStoppedAsked)
         assertFalse(radio.userStoppedApp, "asking cleared it")
+    }
+
+    @Test
+    fun aRestartAfterThePersonStoppedTheAppTurnsItOffAndTellsTheServerInDayMode() = runTest {
+        val b = BleRig(this)
+        b.on(mode = PresenceMode.Day)
+        val (c, radio) = restart(b, FakeBleRadio().apply { running = true; userStoppedApp = true })
+        c.updateContext(b.h.context(BLE_ON))
+        runCurrent()
+        assertTrue(radio.starts.isEmpty(), "nothing resumes")
+        assertFalse(radio.running)
+        assertTrue(b.keys.aliases.isEmpty())
+        assertFalse(c.state.value.ble.on)
+        assertNull(c.state.value.ble.problem, "the person's own off: nothing to explain")
+        assertEquals(listOf("""{"event":"${b.slug}","zone":"Hallway","spot":"Green jacket","until":"day","ble":false}"""), b.presencePuts().map { it.body })
+        assertTrue(b.h.sent("DELETE", "/api/presence").isEmpty())
+        assertTrue(c.state.value.presence.on, "day-mode presence stays on")
+        assertEquals(1, radio.userStoppedAsked)
 
         // Turned on again by hand, it runs: the answer was used up.
         assertEquals(BleOutcome.On, c.turnOnBluetooth())

@@ -14,6 +14,7 @@ import app.conferencecaddie.shared.people.PeopleError
 import app.conferencecaddie.shared.people.PeopleStore
 import app.conferencecaddie.shared.people.PeopleText
 import app.conferencecaddie.shared.people.Presence
+import app.conferencecaddie.shared.people.PresenceMode
 import app.conferencecaddie.shared.people.PresencePutResponse
 import app.conferencecaddie.shared.people.Sighting
 import app.conferencecaddie.shared.people.SightingsRequest
@@ -52,6 +53,9 @@ internal interface BleHost {
 
     /** The presence write with `ble` that repeats the current presence; null when presence is off by its turn. */
     suspend fun writePresenceBle(slug: String, ble: Boolean): ApiResult<PresencePutResponse>?
+
+    /** Turns presence off at [slug], on the device at once and then on the server with a delete. */
+    suspend fun endPresence(slug: String)
 
     fun isBlocked(slug: String, ref: String): Boolean
 
@@ -450,8 +454,11 @@ internal class BleRuntime(
      * When the platform says the person stopped the whole app since the radio last ran
      * ([BleRadio.takeUserStoppedApp], asked at every restore since asking clears it), nothing
      * resumes: every conference whose record says on is turned off as the person's own off, on the
-     * device at once and then, while presence is on, with `ble: false` to the server (best effort,
-     * in the presence write queue, after this returns).
+     * device at once and then on the server (best effort, in the presence write queue, after this
+     * returns). Hour-mode presence ends with it, with a delete: Bluetooth was what kept it on in a
+     * pocket, and a person who stopped the whole app is not counting on it any more. Day-mode
+     * presence stays on, since backgrounding is its normal state, and gets `ble: false` instead.
+     * Presence that has already ended sends nothing.
      */
     suspend fun restore() {
         val slugs = store.slugsWhere { it.ble.on }
@@ -459,8 +466,9 @@ internal class BleRuntime(
             for (s in slugs) {
                 offsBySlug[s] = (offsBySlug[s] ?: 0) + 1
                 problems.remove(s)
+                val hourPresence = host.presence(s).let { it.on && it.mode == PresenceMode.Hour }
                 stop(s)
-                scope.launch { host.writePresenceBle(s, false) }
+                scope.launch { if (hourPresence) host.endPresence(s) else host.writePresenceBle(s, false) }
             }
             platform.radio.stop()
             return

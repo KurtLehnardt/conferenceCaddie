@@ -101,6 +101,29 @@ class CapabilitiesTest {
     }
 
     @Test
+    fun presenceKeepUntilIsReadOnlyAsTheBooleanTrueWithPresence() {
+        val people = """"people": { "enabled": true, "reports": true, "presence": true }"""
+        fun keep(rest: String) = Capabilities.effective(doc("""{ "api_version": 1, $people$rest }""")).presence.keepUntil
+        assertTrue(keep(""", "presence": { "keep_until": true }"""))
+        assertFalse(keep(""))
+        assertFalse(keep(""", "presence": {}"""))
+        assertFalse(keep(""", "presence": { "keep_until": false }"""))
+        assertFalse(keep(""", "presence": { "keep_until": "true" }"""), "a string is not a boolean")
+        assertFalse(keep(""", "presence": { "keep_until": 1 }"""))
+        assertFalse(keep(""", "presence": true"""), "a group that is not an object")
+        assertFalse(
+            Capabilities.effective(doc("""{ "api_version": 1, "people": { "enabled": true, "reports": true }, "presence": { "keep_until": true } }""")).presence.keepUntil,
+            "off with presence",
+        )
+        // Written back only when on, so every contract fixture keeps its form.
+        val on = Capabilities.effective(doc("""{ "api_version": 1, $people, "presence": { "keep_until": true } }"""))
+        assertEquals(doc("""{ "keep_until": true }"""), on.toJson()["presence"])
+        assertEquals(on, Capabilities.effective(on.toJson()))
+        assertFalse("presence" in Capabilities.effective(doc("""{ "api_version": 1, $people }""")).toJson())
+        assertTrue(on.forThisApp().presence.keepUntil)
+    }
+
+    @Test
     fun missingFieldsAreOffAndDependentFeaturesTurnOff() {
         val e = Capabilities.effective(doc("""{ "api_version": 1 }"""))
         assertEquals(Capabilities.Talks(null, false), e.talks)
