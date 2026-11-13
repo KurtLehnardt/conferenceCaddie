@@ -931,6 +931,21 @@ async function requireLiveTopics(passed = '') {
     leave: leaveOutCase(talks, topics, now, cutoff),
   };
 }
+// A conference's expected items (SMOKE_TALKS), or null when they cannot be read. The live conference can
+// have none: SMOKE_LIVE_CONFERENCE may name a conference with no published bundle or committed data/.
+function expectedOrNull(slug) {
+  try {
+    return readNdjson(slug);
+  } catch {
+    return null;
+  }
+}
+// The live conference's talk ids: its expected talks, or its schedule when those cannot be read.
+async function liveTalkIds(slug) {
+  const own = ownTalks.get(slug);
+  if (own?.size) return own;
+  return new Set((await liveData()).talks.map((t) => t.talk_id));
+}
 
 // The capabilities document of the Worker (cap1) or of the tier 3 server (cap3), validated as a
 // producer's (docs/contracts/capabilities.md), in closed mode. Later checks read ble.mode from it.
@@ -1293,7 +1308,9 @@ await check('e2: include_events must be a boolean, and For you never holds an ev
   if (bad.status !== 400) throw new Error(`include_events: "yes" gave ${bad.status}, not 400`);
   const passed = 'the boolean check passed (include_events "yes" gave 400); the For-you part: ';
   const live = await requireLiveTopics(passed);
-  const ambient = new Set(readNdjson(live.slug).filter((d) => d.kind === 'ambient').map((d) => d.talk_id));
+  const docs = expectedOrNull(live.slug);
+  if (!docs) throw new SkipCheck(`${passed}the expected items of ${live.slug} could not be read, so its co-located events are not known`);
+  const ambient = new Set(docs.filter((d) => d.kind === 'ambient').map((d) => d.talk_id));
   if (!ambient.size) throw new SkipCheck(`${passed}${live.slug} has no co-located event or showcase for For you to keep out`);
   const learn = live.rankedIds.slice(0, 2);
   const recs = await api('POST', '/api/recommendations', { event: live.slug, learn_topics: learn, interests: 'solutions showcase and co-located events', interested_talk_ids: [], size: 50 }, { label: 'recs' });
@@ -1402,13 +1419,16 @@ await check('n2: Happening now keeps only talks in progress or starting within 6
   const all = await searchIn(slug, { query: '', size: 1 });
   if (r.status !== 200 || all.status !== 200) throw new Error(`status ${r.status} and ${all.status}`);
   const outside = (r.json.results ?? []).filter((t) => !(Date.parse(t.end) > at - slack && Date.parse(t.start) < at + 60 * 60_000 + slack));
-  const talks = readNdjson(slug).filter((d) => d.kind === 'talk');
+  // The expected talks, or, for a live conference whose expected talks cannot be read, its schedule.
+  const docs = expectedOrNull(slug);
+  const talks = docs ? docs.filter((d) => d.kind === 'talk') : (await liveData()).talks;
+  const source = docs ? 'the data' : 'GET /api/schedule (its expected talks could not be read)';
   const expected = talks.filter((d) => Date.parse(d.end) > at + slack && Date.parse(d.start) < at + 60 * 60_000 - slack).length;
   // An empty window makes the bound vacuous. Skip only when the data agrees that none is in the window:
   // an empty answer where the data expects talks is the failure the check is for (total >= expected below).
   if (emptyWindowSkip(r.json.total, expected)) throw new SkipCheck(`the boolean check passed (400); no talk of ${slug} is in progress or starting within 60 minutes, so the window has nothing to check`);
   const ok = outside.length === 0 && r.json.total >= expected && r.json.total <= all.json.total && bad.status === 400;
-  report(ok, 'n2: Happening now keeps only talks in progress or starting within 60 minutes, and must be a boolean', `${slug}: ${r.json.total} of ${all.json.total} talks, at least ${expected} expected from the data, ${outside.length} outside the window, bad type gave ${bad.status}`);
+  report(ok, 'n2: Happening now keeps only talks in progress or starting within 60 minutes, and must be a boolean', `${slug}: ${r.json.total} of ${all.json.total} talks, at least ${expected} expected from ${source}, ${outside.length} outside the window, bad type gave ${bad.status}`);
 });
 
 await check('m2: "after lunch day 2" uses that day\'s lunch break and an empty remainder browses', async () => {
@@ -2485,6 +2505,7 @@ try {
     const second = await api('POST', '/api/recommendations', { event: slug, learn_topics: [topic.topic_id], interests: topic.label, interested_talk_ids: marked, size: 50 }, { label: 'recs' });
     const chips = await api('POST', '/api/recommendations', { event: slug, learn_topics: [topic.topic_id], interested_talk_ids: marked, size: 50 }, { label: 'recs' });
     const results = second.json.results ?? [];
+    const own = await liveTalkIds(slug);
     const now = Date.now();
     const problems = [];
     if (!results.length) problems.push('no results');
@@ -2495,7 +2516,7 @@ try {
     for (const r of [...results, ...chipResults]) {
       if (Date.parse(r.end) <= now) problems.push(`ended talk "${r.title}"`);
       if (marked.includes(r.talk_id)) problems.push(`marked talk "${r.title}"`);
-      if (!ownTalks.get(slug).has(r.talk_id)) problems.push(`foreign talk "${r.title}"`);
+      if (!own.has(r.talk_id)) problems.push(`foreign talk "${r.title}"`);
     }
     const empty = await api('POST', '/api/recommendations', { event: slug, interested_talk_ids: [] }, { label: 'recs' });
     if (!(empty.status === 200 && empty.json.needs_profile === true)) problems.push('an empty profile does not get needs_profile');
@@ -2509,11 +2530,23 @@ try {
     // The extra conferences, and the live one, whose talks are still to come (For you suggests only those).
     const slugs = [...new Set([...EXTRA, ...(LIVE.slug ? [LIVE.slug] : [])])];
     for (const slug of slugs) {
-      const topics = (topicsBySlug.get(slug) ?? []).slice(0, 3).map((t) => t.topic_id);
+      let topics = (topicsBySlug.get(slug) ?? []).slice(0, 3).map((t) => t.topic_id);
+      // The live conference is asked for topics that have talks to come, so it must suggest some.
+      let mustSuggest = false;
+      if (slug === LIVE.slug) {
+        try {
+          topics = (await requireLiveTopics()).rankedIds.slice(0, 3);
+          mustSuggest = true;
+        } catch (err) {
+          if (!(err instanceof SkipCheck)) throw err;
+        }
+      }
+      const own = slug === LIVE.slug ? await liveTalkIds(slug) : ownTalks.get(slug);
       const r = await api('POST', '/api/recommendations', { event: slug, learn_topics: topics, interests: 'agents and model training', interested_talk_ids: [], size: 50 }, { label: 'recs' });
       if (r.status !== 200) problems.push(`${slug} gave ${r.status}`);
+      else if (mustSuggest && !(r.json.results ?? []).length) problems.push(`${slug} has talks to come on ${topics.join(', ')} but got no suggestion`);
       suggested += (r.json.results ?? []).length;
-      for (const t of r.json.results ?? []) if (!ownTalks.get(slug).has(t.talk_id)) problems.push(`${slug} got "${t.title}"`);
+      for (const t of r.json.results ?? []) if (!own.has(t.talk_id)) problems.push(`${slug} got "${t.title}"`);
     }
     // With no suggestion at all nothing could cross: For you only suggests talks still to come.
     if (!problems.length && !suggested) throw new SkipCheck(slugs.length ? `no talk of ${slugs.join(' or ')} was suggested (For you only suggests talks still to come), so none could cross` : 'SMOKE_EXTRA names no conference and there is no live conference');
@@ -3343,7 +3376,7 @@ if (!WORKER_SERVES_APP) {
 
 if (noLiveSkips > 0) console.log(`NOTE ${noLiveSkips} check${noLiveSkips === 1 ? '' : 's'} skipped because ${LIVE.why}; set SMOKE_LIVE_CONFERENCE to a searchable conference with talks to come to run ${noLiveSkips === 1 ? 'it' : 'them'}`);
 else if (LIVE.slug && LIVE.slug !== PRIMARY) console.log(`NOTE ${LIVE_CHECKS} ran against ${LIVE.slug}, not the primary conference (${LIVE.why})`);
-if (primaryOverSkips > 0) console.log(`NOTE r7 stays on the primary conference (its query and the passages it expects are KubeCon content) and skipped because ${primaryOverWhy}; it runs again while the primary conference has talks to come`);
+if (primaryOverSkips > 0) console.log(`NOTE r7 stays on the primary conference (its query and the passages it expects are the primary conference's content) and skipped because ${primaryOverWhy}; it runs again while the primary conference has talks to come`);
 if (process.env.SMOKE_STRICT === '1') {
   report(retried === 0, 'strict: no request answered 5xx or failed on its first attempt', retried ? `${retried} did; see the NOTE lines above` : 'none needed a retry');
 }

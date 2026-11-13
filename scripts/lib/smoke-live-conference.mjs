@@ -23,6 +23,9 @@ export const FOR_YOU_WINDOW = 50;
 // A conference's listed end_date is a local date: its last talk ends at the latest 36 hours after that
 // date's UTC midnight (the date's end at UTC-12, with time to spare).
 const END_DATE_SLACK_MS = 36 * 3600_000;
+// The smoke's clock may run ahead of the server's: returnsLeftOut counts talks that ended this long ago
+// as still in the server's pool, so its count errs high.
+const CLOCK_SKEW_MS = 5 * 60_000;
 
 const talkOnly = (docs) => (docs ?? []).filter((d) => d?.kind === 'talk');
 
@@ -82,6 +85,7 @@ export async function pickLiveConference({ primary, override = '', conferences, 
   if (!conferencesKnown) return { slug: null, source: 'none', why: `${own.why} and ${unread}, so no other conference could be looked for`, primary: primaryState };
 
   const passed = [];
+  const unreadable = [];
   for (const c of searchable) {
     if (c.slug === primary) continue;
     // A conference whose listed last day is well past is not read: its bundle would only say so.
@@ -95,8 +99,11 @@ export async function pickLiveConference({ primary, override = '', conferences, 
       return { slug: c.slug, source: 'fallback', why: `${own.why}; ${c.slug} is the first searchable conference of GET /api/conferences with talks to come (${s.toCome})${over}`, primary: primaryState };
     }
     passed.push(`${c.slug}: ${s.why}`);
+    if (!s.known) unreadable.push(`${c.slug} (${s.why})`);
   }
-  return { slug: null, source: 'none', why: `${own.why} and no other searchable conference has talks to come`, primary: primaryState };
+  // Conferences whose talks could not be read may have talks to come: the reason names them.
+  const unknown = unreadable.length ? `; ${unreadable.length === 1 ? 'one could not be read' : 'some could not be read'}: ${unreadable.join('; ')}` : '';
+  return { slug: null, source: 'none', why: `${own.why} and no other searchable conference has talks to come${unknown}`, primary: primaryState };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -138,11 +145,12 @@ export function cooccurring(talks, cutoffMs) {
 // talk that carries `leftOut` and ends after cutoffMs, whatever order the server gives talks of equal
 // score. Both tiers score a talk by the number of learn topics it carries and keep the best
 // FOR_YOU_WINDOW of the talks whose end is after now; talks only leave that pool as time passes, so a
-// talk that is certain to be in the answer now stays so until it ends.
+// talk that is certain to be in the answer now stays so until it ends. Talks that ended up to
+// CLOCK_SKEW_MS ago still count, in case the server's clock is behind the smoke's.
 export function returnsLeftOut(talks, learn, leftOut, nowMs, cutoffMs, window = FOR_YOU_WINDOW) {
   const want = new Set(learn);
   const pool = talks
-    .filter((t) => Date.parse(t.end) > nowMs)
+    .filter((t) => Date.parse(t.end) > nowMs - CLOCK_SKEW_MS)
     .map((t) => ({ t, ids: topicIdsOf(t) }))
     .map((x) => ({ ...x, n: x.ids.filter((id) => want.has(id)).length }))
     .filter((x) => x.n > 0);

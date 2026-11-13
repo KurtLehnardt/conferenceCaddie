@@ -93,6 +93,13 @@ describe('pickLiveConference', () => {
     assert.equal(live.why, `every talk of ${PRIMARY} has ended and no other searchable conference has talks to come`);
   });
 
+  test('none live, but a conference could not be read: the reason names it, since it may have talks to come', async () => {
+    const s = stubs({ conferences: LIST, bundles: { [PRIMARY]: ended(PRIMARY), [GRPC]: ended(GRPC), [MCP]: ended(MCP) } });
+    const live = await pickLiveConference({ primary: PRIMARY, conferences: s.conferences, loadTalks: s.loadTalks, now: clock });
+    assert.equal(live.slug, null);
+    assert.equal(live.why, `every talk of ${PRIMARY} has ended and no other searchable conference has talks to come; one could not be read: ${PYTORCH} (its talks could not be read: the published index has no bundle for it)`);
+  });
+
   test('none live when the API lists no conference at all', async () => {
     const s = stubs({ conferences: [], bundles: { [PRIMARY]: ended(PRIMARY) } });
     const live = await pickLiveConference({ primary: PRIMARY, conferences: s.conferences, loadTalks: s.loadTalks, now: clock });
@@ -233,6 +240,8 @@ describe('the For-you topics of the live conference, from its schedule', () => {
     assert.equal(returnsLeftOut([...many(49, 'y'), st(NOW + H, 'y', 'x')], ['y'], 'x', NOW, CUT), true);
     // 51 talks tie: the server may leave out the one carrying x.
     assert.equal(returnsLeftOut([...many(50, 'y'), st(NOW + H, 'y', 'x')], ['y'], 'x', NOW, CUT), false);
+    // A talk that ended two minutes ago may still be in the pool of a server whose clock is behind.
+    assert.equal(returnsLeftOut([...many(49, 'y'), st(NOW - 2 * 60_000, 'y'), st(NOW + H, 'y', 'x')], ['y'], 'x', NOW, CUT), false);
     // Carrying both learn topics puts it above the 60 that carry one.
     assert.equal(returnsLeftOut([...many(60, 'y'), st(NOW + H, 'y', 'z', 'x')], ['y', 'z'], 'x', NOW, CUT), true);
     // Ended talks are out of the pool; a talk carrying x that ends within the margin does not count.

@@ -2,7 +2,7 @@
 // (scripts/lib/smoke-live-conference.mjs). The stub serves GET /api/conferences, the published bundles
 // (conferences.json and each bundle.json, with talks placed around the real clock), the topic lists, the
 // schedules and a For-you endpoint that, like the server, suggests only talks whose end is after now.
-// Seven runs:
+// Nine runs:
 //   - the primary conference is live: the clock-dependent checks ask it, with the KubeCon topics;
 //   - the primary is live but its AI talks have ended: r6 learns agents, which still shares a talk with
 //     Kubernetes, instead of failing on "no results";
@@ -11,7 +11,8 @@
 //     r7, which stays on the primary, prints SKIP;
 //   - no conference is live: every one of them prints SKIP with the reason and none prints PASS or asks
 //     For you anything, and the counts at the end count them as SKIP;
-//   - SMOKE_LIVE_CONFERENCE names a live conference: it is used; naming an unavailable one is a FAIL.
+//   - SMOKE_LIVE_CONFERENCE names a live conference: it is used; naming one with no published bundle uses
+//     its schedule in place of the expected talks; naming an unavailable one is a FAIL.
 // Most other checks fail against the stub; only the lines named here matter. Nothing reaches the network:
 // BASE_URL and SMOKE_BUNDLE_BASE point at the stub, and the bundle scan and the external GET are skipped.
 
@@ -31,6 +32,8 @@ const EXTRA = 'stub-extra-2026';
 const LIVE = 'stub-live-2026';
 const LATER = 'stub-later-2026';
 const UNAVAILABLE = 'stub-unavailable-2026';
+const OLD = 'stub-old-2026'; // listed as ended three days ago, whatever its bundle says
+const UNPUBLISHED = 'stub-unpublished-2026'; // searchable, with talks to come, but no published bundle
 const CIRCLE_TALK_TITLE = 'From Bytes to Traces: A Deep Dive into OpenTelemetry eBPF Instrumentation Internals';
 const H = 3600_000;
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -67,21 +70,25 @@ const topicList = (docs) => {
   return [...n].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([topic_id, talk_count]) => ({ topic_id, label: labelOf(topic_id), talk_count }));
 };
 
-const conference = (slug, status, docs) => ({
-  slug, name: slug, start_date: '2026-11-09', end_date: '2026-11-12', time_zone: status === 'searchable' ? 'UTC' : null,
+// Listed dates relative to the real clock, so the 36-hour end-date pass-over never depends on the day the
+// test runs: by default the conference started three days ago and ends in two.
+const isoDate = (ms) => iso(ms).slice(0, 10);
+const conference = (slug, status, docs, endDate = isoDate(Date.now() + 48 * H)) => ({
+  slug, name: slug, start_date: isoDate(Date.now() - 72 * H), end_date: endDate, time_zone: status === 'searchable' ? 'UTC' : null,
   location: { city: '', region: '', country: '', virtual: true }, status, official_schedule_url: 'https://example.org/schedule/',
   source: 'sessionize', has_level: false, track_group: null, tag_groups: [], talk_count: docs.filter((d) => d.kind === 'talk').length,
 });
 
-// The stub backend. bundles: slug -> items (every kind); order: the GET /api/conferences order. With
-// forYouEmpty, For you answers no talk to any request.
-function stubBackend(order, bundles, { forYouEmpty = false } = {}) {
+// The stub backend. bundles: slug -> items (every kind), which the API serves; order: the GET
+// /api/conferences order, each [slug, status, listed end date (optional)]. With forYouEmpty, For you
+// answers no talk to any request; the conferences in unpublished have no bundle in the index.
+function stubBackend(order, bundles, { forYouEmpty = false, unpublished = [] } = {}) {
   const requests = [];
   const files = new Map(); // path under /bundles/ -> bytes
-  const entries = order.map(([slug, status]) => {
+  const entries = order.map(([slug, status, endDate]) => {
     const docs = bundles[slug] ?? [];
-    const conf = conference(slug, status, docs);
-    if (status !== 'searchable') return { ...conf, bundle: null };
+    const conf = conference(slug, status, docs, endDate);
+    if (status !== 'searchable' || unpublished.includes(slug)) return { ...conf, bundle: null };
     const bytes = Buffer.from(JSON.stringify({ bundle_version: 1, conference: conf, talks: docs }));
     const hash = sha(bytes);
     const path = `${slug}/${hash.slice(0, 16)}/`;
@@ -214,7 +221,8 @@ describe('scripts/smoke.mjs live conference', { timeout: 600_000 }, () => {
       primaryLive: [[[PRIMARY, 'searchable'], [EXTRA, 'searchable'], [LIVE, 'searchable']], { [PRIMARY]: talks(PRIMARY, 2, KUBE_TOPICS, { ambient: true }), [EXTRA]: ended(EXTRA), [LIVE]: talks(LIVE, 2, GRPC_TOPICS) }, {}],
       aiEnded: [[[PRIMARY, 'searchable'], [EXTRA, 'searchable']], { [PRIMARY]: aiEnded, [EXTRA]: ended(EXTRA) }, {}],
       forYouEmpty: [[[PRIMARY, 'searchable'], [EXTRA, 'searchable']], { [PRIMARY]: talks(PRIMARY, 2, KUBE_TOPICS, { ambient: true }), [EXTRA]: ended(EXTRA) }, {}, { forYouEmpty: true }],
-      fallback: [[[PRIMARY, 'searchable'], [UNAVAILABLE, 'unavailable'], [EXTRA, 'searchable'], [LIVE, 'searchable'], [LATER, 'searchable']], { [PRIMARY]: ended(PRIMARY), [EXTRA]: ended(EXTRA), [LIVE]: talks(LIVE, 2, GRPC_TOPICS, { ambient: true }), [LATER]: talks(LATER, 5, KUBE_TOPICS) }, {}],
+      fallback: [[[PRIMARY, 'searchable'], [UNAVAILABLE, 'unavailable'], [EXTRA, 'searchable'], [OLD, 'searchable', isoDate(Date.now() - 72 * H)], [LIVE, 'searchable'], [LATER, 'searchable']], { [PRIMARY]: ended(PRIMARY), [EXTRA]: ended(EXTRA), [OLD]: talks(OLD, 2, GRPC_TOPICS), [LIVE]: talks(LIVE, 2, GRPC_TOPICS, { ambient: true }), [LATER]: talks(LATER, 5, KUBE_TOPICS) }, {}],
+      unpublished: [[[PRIMARY, 'searchable'], [EXTRA, 'searchable'], [UNPUBLISHED, 'searchable']], { [PRIMARY]: ended(PRIMARY), [EXTRA]: ended(EXTRA), [UNPUBLISHED]: talks(UNPUBLISHED, 2, GRPC_TOPICS) }, { SMOKE_LIVE_CONFERENCE: UNPUBLISHED }, { unpublished: [UNPUBLISHED] }],
       none: [[[PRIMARY, 'searchable'], [UNAVAILABLE, 'unavailable'], [EXTRA, 'searchable'], [LIVE, 'searchable']], { [PRIMARY]: ended(PRIMARY), [EXTRA]: ended(EXTRA), [LIVE]: ended(LIVE, GRPC_TOPICS) }, {}],
       override: [[[PRIMARY, 'searchable'], [EXTRA, 'searchable'], [LIVE, 'searchable'], [LATER, 'searchable']], { [PRIMARY]: ended(PRIMARY), [EXTRA]: ended(EXTRA), [LIVE]: talks(LIVE, 2, GRPC_TOPICS), [LATER]: talks(LATER, 5, KUBE_TOPICS) }, { SMOKE_LIVE_CONFERENCE: LATER }],
       badOverride: [[[PRIMARY, 'searchable'], [UNAVAILABLE, 'unavailable'], [EXTRA, 'searchable'], [LIVE, 'searchable']], { [PRIMARY]: ended(PRIMARY), [EXTRA]: ended(EXTRA), [LIVE]: talks(LIVE, 2, GRPC_TOPICS) }, { SMOKE_LIVE_CONFERENCE: UNAVAILABLE }],
@@ -258,12 +266,14 @@ describe('scripts/smoke.mjs live conference', { timeout: 600_000 }, () => {
     const run = runs.forYouEmpty;
     assert.match(liveNote(run), new RegExp(`^NOTE live conference: ${PRIMARY} \\(the primary conference`));
     for (const id of ['e2', 'p3', 'r1', 'r3', 'r4', 'r6', 'r8']) assert.match(lineOf(run, id), /^FAIL /, id);
+    assert.match(lineOf(run, 'r2'), new RegExp(`^FAIL r2: .*${PRIMARY} has talks to come on .* but got no suggestion`), 'r2 does not skip when the live conference suggests nothing');
     assert.equal(run.code, 1);
   });
 
   test('primary ended and another live: the checks ask that conference with its own topics, and say so', () => {
     const run = runs.fallback;
-    assert.match(liveNote(run), new RegExp(`^NOTE live conference: ${LIVE} \\(every talk of ${PRIMARY} has ended; ${LIVE} is the first searchable conference of GET /api/conferences with talks to come \\(6\\); passed over: ${EXTRA}: every talk of ${EXTRA} has ended\\)`));
+    assert.match(liveNote(run), new RegExp(`^NOTE live conference: ${LIVE} \\(every talk of ${PRIMARY} has ended; ${LIVE} is the first searchable conference of GET /api/conferences with talks to come \\(6\\); passed over: ${EXTRA}: every talk of ${EXTRA} has ended; ${OLD}: ended on ${isoDate(Date.now() - 72 * H)}\\)`));
+    assert.ok(!run.requests.some((r) => r.path.startsWith(`/bundles/${OLD}/`)), 'a conference listed as long over is not downloaded');
     for (const id of ['e2', 'p3', 'r1', 'r3', 'r4', 'r6', 'r8']) assert.match(lineOf(run, id), new RegExp(`^PASS .*${LIVE}`), id);
     // gRPC is LIVE's topic with the most talks to come; AI and Python are the two with the most talks to
     // come that share one with it (security shares one too, but has fewer).
@@ -302,6 +312,14 @@ describe('scripts/smoke.mjs live conference', { timeout: 600_000 }, () => {
     assert.match(liveNote(run), new RegExp(`^NOTE live conference: ${LATER} \\(SMOKE_LIVE_CONFERENCE, 7 talks to come\\)`));
     for (const id of ['p3', 'r1', 'r3', 'r4', 'r6', 'r8']) assert.match(lineOf(run, id), new RegExp(`^PASS .*${LATER}`), id);
     for (const r of learnAsked(run.requests)) assert.ok([LATER, EXTRA].includes(r.body.event), `asked ${r.body.event}`);
+  });
+
+  test('SMOKE_LIVE_CONFERENCE naming a conference with no published bundle: its schedule stands in for the expected talks', () => {
+    const run = runs.unpublished;
+    assert.match(liveNote(run), new RegExp(`^NOTE live conference: ${UNPUBLISHED} \\(SMOKE_LIVE_CONFERENCE; its talks could not be read: the published bundle of ${UNPUBLISHED}: the published index has no bundle for it, so it is taken as live\\)`));
+    for (const id of ['p3', 'r1', 'r2', 'r3', 'r4', 'r6', 'r8']) assert.match(lineOf(run, id), /^PASS /, id);
+    assert.match(lineOf(run, 'e2'), new RegExp(`^SKIP e2: .*the expected items of ${UNPUBLISHED} could not be read`));
+    assert.match(lineOf(run, 'n2'), new RegExp(`^SKIP n2: .*no talk of ${UNPUBLISHED} is in progress`));
   });
 
   test('SMOKE_LIVE_CONFERENCE naming a conference that is not searchable is a FAIL, and the checks SKIP with that reason', () => {
