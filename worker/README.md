@@ -831,9 +831,11 @@ line (method, path template, status, duration).
   answers `{"day": "<UTC day>" | null, "usage": {"<slug>": {"requests", "rows_read",
   "rows_written"}}, "holds": {"<slug>": true}}` from what the cron stored on its last run (every 10
   minutes): the day's totals of each conference and the conferences whose object still held
-  personal data. Totals of another UTC day than the cron's are left out. Any query parameter is
+  personal data. Totals of another UTC day than the cron's are left out. The demo conference
+  (`demo: true`, see [The demo conference](#the-demo-conference)) is left out of both `usage` and
+  `holds`, because these totals span conferences. Any query parameter is
   400, so a misspelt `event` never answers the totals. With `event` the route is the conference's
-  own, as before.
+  own, as before, and answers for the demo too.
 - `PUT /admin/conferences` skips a slug that has a tombstone and answers it in `skipped_retired`
   (beside `upserted`, `searchable` and `synced`; the list is empty when nothing was skipped), so the
   weekly ingest cannot bring a removed conference back. When any document of that slug in the
@@ -924,8 +926,8 @@ wins, and an automatic retry counts as a new, later request: `adminClient` repea
 answered a 503 other than `daily_limit` (or a 5xx, or no answer), so a retried removal can undo an
 unretire that the operator ran in between, and a repeated unretire can undo a removal. After any
 overlap, check the conference's state (`GET /api/conferences` lists it only while the directory
-has its row, and a signed `GET /admin/stats?event=<slug>` answers `400 conference is not
-available` once it is removed) and run the operation you intended again. Neither check can tell a
+has its row, except a demo conference that is not searchable, which it never lists, and a signed
+`GET /admin/stats?event=<slug>` answers `400 conference is not available` once it is removed) and run the operation you intended again. Neither check can tell a
 live conference from one whose directory row exists while its object is still marked as removed,
 which is what an unretire that answered 502 or 503 and was not repeated leaves: both list the
 conference and answer the stats. So repeat an unretire until it answers 200.
@@ -970,6 +972,43 @@ actual status the 409 showed, or without the key, until it answers 200. Nothing 
 comes from the request or a header. The `caddie-admin` CLI does not use `adminClient`; it has its
 own client and shows these answers in its own way.
 
+## The demo conference
+
+The demo conference (`config/demo-conference.json`, off by default; docs/ADMIN_CLI.md, "The demo
+conference") is an invented conference whose talks are always yesterday, today and tomorrow. Its
+document carries `demo: true` and `source: "demo"`, and the directory stores it as it is, like any
+conference document. The Worker treats it as tier 3 does (DECISIONS.md, "The demo conference on the
+Worker"):
+
+- `GET /api/conferences` gives its entry `demo: true`, after the other fields, and leaves it out
+  altogether while it is not searchable (hidden or switched off), instead of listing it as
+  unavailable. Every other entry keeps exactly its fields.
+- A nudge about it has the title `Conference Caddie (Demo)` and a body that starts `Demo: someone
+  who's worked on`.
+- Its last day is always tomorrow, so its object's `visible_until_ms`, which profiles, push
+  subscriptions, blocks and meets take, is `DEMO_GRACE_DAYS` (7) days later, as on tier 3
+  (`conferenceVisibleUntilMs` in `src/lib/time.js`).
+- The cron still visits it for its own purge, but its usage is never added to another conference's
+  meter (the `others` that the pace and the soft caps of each object read), and it is left out of
+  `GET /admin/stats` without `event`. Its own meter still counts every real conference.
+- When its document arrives with any status other than `searchable` (`caddie-admin conferences
+  hide`, or an ingest whose operator file hides it), its object deletes every presence row with its
+  Bluetooth session, the positions in memory, the Bluetooth caps record, every meet, nudge and nudge
+  send, and replaces its Store as a wipe does, so a request in flight cannot write a row back or
+  push about it. Profiles, shared talks, blocks, reports and push subscriptions stay, and the cron
+  purges them as for any conference. A real conference's hide keeps everything, as before.
+  `DELETE /admin/conference` wipes the demo like any conference.
+- `.github/workflows/demo-conference.yml` refreshes it every three hours (its `worker` job) with
+  `scripts/ingest.mjs --event <its slug> --dry-run` and `push-ingest.mjs --events-from` the
+  ingest's report `--refresh-only`, with the `CADDIE_API_BASE` variable and the `CADDIE_ADMIN_TOKEN`
+  secret that `ingest.yml` uses. `--refresh-only` pushes only while `GET /api/conferences` lists the
+  demo as searchable, so the refresh never adds it, shows a hidden one again or brings back a
+  removed one, and logs a notice instead; adding it is the operator's `caddie-admin conferences
+  add`, which runs `ingest.yml`. The talk ids never change, so each push moves the times of the
+  same talks: finalize deletes nothing, nobody's shared talks change and nothing is re-embedded.
+  The job sends no Cloudflare Access headers, so it cannot reach a Worker whose `/admin/*` an
+  Access application guards.
+
 ## Logs and CPU
 
 The Worker logs one line per request (method, path template, status and duration) and never a
@@ -1013,7 +1052,7 @@ npx wrangler tail --format json | node /path/to/scratch/tail-filter.mjs
 If the token lacks the tail permission, CPU problems show up instead as Error 1102 failures in the
 live smoke. `GET /admin/stats?event=<slug>` returns row counts and the day's usage meter
 (requests, rows read, rows written and the current pace); `GET /admin/stats` without `event`
-returns every conference's totals as the cron last stored them.
+returns every conference's totals as the cron last stored them, without the demo conference's.
 
 ## Free-plan limits
 
