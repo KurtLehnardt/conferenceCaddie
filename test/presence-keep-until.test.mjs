@@ -3,8 +3,8 @@
 // zone, spot or position change never makes someone visible for longer than they chose. It needs
 // live presence and never starts it; it is refused with 400 presence_not_active otherwise, and it
 // is judged against the profile read that guards the write, so a presence that ended between the
-// read and the write is never brought back. 'hour' and 'day' are unchanged, except that 'day' in
-// the last second of a conference day (after 23:59:59.000 in the conference's time zone, when that
+// read and the write is never brought back. 'hour' and 'day' are unchanged, except that 'day' from
+// 23:59:59.000 until midnight in the conference's time zone (the last second of a day, when that
 // day's end has already passed) runs to the end of the next day instead of answering 400
 // "conference has ended". The 'day' tests run on a pinned clock, so they do not depend on the
 // time of day the suite runs at.
@@ -83,7 +83,8 @@ function setup(fields = {}, untilMs = Date.now() + 20 * MIN, event = EVENT) {
 // reads no other clock, and the stand-in reads Date.now for "now" too. The pinned instants are in
 // 2099, before the test conferences end; the server's caches stamped then look fresh to the real
 // clock afterwards, which is harmless here, because every cluster holds the same conferences and
-// zones.
+// zones. The pinned tests stay after the real-clock ones, so no real-clock test reads a cache a
+// pinned one filled.
 async function atClock(atMs, fn) {
   const realNow = Date.now;
   Date.now = () => atMs;
@@ -286,7 +287,7 @@ describe("until: 'keep'", () => {
   });
 });
 
-describe("'hour' and 'day' are unchanged", () => {
+describe("'hour' and 'day'", () => {
   test("'hour' (and no until, and null) restart the hour from now and keep since", async () => {
     for (const until of ['hour', undefined, null]) {
       const { device, doc, since } = setup();
@@ -400,14 +401,16 @@ describe("'day' at the end of a conference day", () => {
       });
       // From the end of the conference, which is the last second of its last day, 'day' does not
       // run on to the next day.
-      for (const after of [1, 500, 1000, 60_000]) {
+      for (const after of [1, 500, 1000, 61_000]) {
         await atClock(lastMs + after, async () => {
           const { device, cluster, doc } = setup(outlasting, lastMs + after + 20 * MIN, event);
           const before = doc();
           const { result } = await put(device, { event, until: 'day' });
           assert.equal(result.status, 400, `${event} +${after} ms`);
           assert.deepEqual(result.body, { error: 'conference has ended' });
-          assert.deepEqual(cluster.tags(), ['get'], 'read, refused, nothing written');
+          // A clock that moved past a cache's lifetime also refills it (search:conferences,
+          // search:talks for the zones); those reads aside, the profile is read and nothing more.
+          assert.deepEqual(cluster.tags().filter((t) => !t.startsWith('search:')), ['get'], 'read, refused, nothing written');
           assert.deepEqual(doc(), before);
         });
       }
@@ -427,6 +430,19 @@ describe("'day' at the end of a conference day", () => {
     ]) {
       assert.equal(iso(dayEndAfter(Date.parse(clock), LA)), end, clock);
       assert.equal(iso(worker.dayEndAfter(Date.parse(clock), LA)), end, `${clock} (Worker)`);
+    }
+    // Where daylight saving time ends at midnight, the last hour of the day comes twice: in
+    // Santiago, 4 April 2026 runs 23:00 to 23:59:59 at UTC-3, then again at UTC-4. Today's end is
+    // the first pass, so from then on, through the repeated hour, 'day' runs to the end of 5 April.
+    const SANTIAGO = 'America/Santiago';
+    for (const [clock, end] of [
+      ['2026-04-05T02:59:58.999Z', '2026-04-05T02:59:59.000Z'],
+      ['2026-04-05T02:59:59.500Z', '2026-04-06T03:59:59.000Z'],
+      ['2026-04-05T03:30:00.000Z', '2026-04-06T03:59:59.000Z'],
+      ['2026-04-05T04:00:00.000Z', '2026-04-06T03:59:59.000Z'],
+    ]) {
+      assert.equal(iso(dayEndAfter(Date.parse(clock), SANTIAGO)), end, clock);
+      assert.equal(iso(worker.dayEndAfter(Date.parse(clock), SANTIAGO)), end, `${clock} (Worker)`);
     }
 
     // Around each zone's midnight, on an ordinary day, at a month's end and on both daylight saving

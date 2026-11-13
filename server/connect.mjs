@@ -508,10 +508,9 @@ async function putPresence(req, res) {
     if (!(await zonesFor(conf.slug)).has(zone)) throw bad("zone must be one of the conference's zones");
     const now = Date.now();
     // 'hour' runs out in 60 minutes; 'day' at the end of the conference day (its time zone), when
-    // the client's zone confirmation does the safeguarding instead; in the last second of a day,
-    // once 23:59:59 has passed, at the end of the next day (dayEndAfter). 'keep' writes back the
-    // end this read found and is refused when there is none or it has passed, so it never starts
-    // presence.
+    // the client's zone confirmation does the safeguarding instead; from 23:59:59 until midnight,
+    // at the end of the next day (dayEndAfter). 'keep' writes back the end this read found and is
+    // refused when there is none or it has passed, so it never starts presence.
     // The write is guarded by this read's sequence number: when a delete, the purge or another
     // write changed the document in between, it is read and judged again, so 'keep' cannot bring
     // back an end that is gone. Decided on this read: a 'keep' at the very edge may write back an
@@ -606,7 +605,10 @@ async function requestMeet(req, res) {
     },
   });
   if ((declined.json.count ?? 0) >= DECLINES_PER_DAY) {
-    throw new HttpError(429, { error: 'paused', message: 'Three people said not now today. You can ask again tomorrow.', retry_at: iso(day.end) }, { 'Retry-After': String(Math.max(1, Math.ceil((day.end - now) / 1000))) });
+    // The count starts again at midnight, one second after the day's end (23:59:59.000), so the
+    // ask can be made again from then on, also when it is refused in the last second of the day.
+    const resumeMs = day.end + 1000;
+    throw new HttpError(429, { error: 'paused', message: 'Three people said not now today. You can ask again tomorrow.', retry_at: iso(resumeMs) }, { 'Retry-After': String(Math.max(1, Math.ceil((resumeMs - now) / 1000))) });
   }
 
   // "Not now" is silent: the requester of a declined ask still sees it as waiting until it runs out

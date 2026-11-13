@@ -420,6 +420,14 @@ test("'day' in the last second of a conference day runs to the end of the next d
       assert.ok(on.json.ble_key);
       assert.equal(s.row().until_ms, Date.parse(end));
       assert.ok(s.row().ble_token_until_ms <= Date.parse(end), `${label}: the token never outlives the presence`);
+      // A position fix sent with 'day' while it is on is the same mode and the same end
+      // (curMode), so it writes no presence row.
+      s.writes.length = 0;
+      const fix = await s.put({ until: 'day', location: HERE });
+      assert.equal(fix.status, 200, label);
+      assert.equal(fix.json.presence_until, end, label);
+      assert.equal(fix.json.located, true);
+      assert.deepEqual(s.writes, [], `${label}: a position-only 'day' write writes no presence row`);
       // 'day' again while it is on: the same end, and since is kept.
       const again = await s.put({ zone: 'Expo hall', until: 'day' });
       assert.equal(again.status, 200, label);

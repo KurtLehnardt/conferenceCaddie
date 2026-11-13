@@ -324,10 +324,13 @@ async function requestMeet(ctx, req) {
     me.profile_id, day.start,
   ).one().n;
   if (declined >= DECLINES_PER_DAY) {
+    // The count starts again at midnight, one second after the day's end (23:59:59.000), so the
+    // ask can be made again from then on, also when it is refused in the last second of the day.
+    const resumeMs = day.end + 1000;
     throw new HttpError(
       429,
-      { error: 'paused', message: 'Three people said not now today. You can ask again tomorrow.', retry_at: iso(day.end) },
-      { 'Retry-After': String(Math.max(1, Math.ceil((day.end - now) / 1000))) },
+      { error: 'paused', message: 'Three people said not now today. You can ask again tomorrow.', retry_at: iso(resumeMs) },
+      { 'Retry-After': String(Math.max(1, Math.ceil((resumeMs - now) / 1000))) },
     );
   }
 
