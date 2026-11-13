@@ -602,8 +602,19 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
     return { upserted: int(json.upserted), searchable: int(json.searchable), synced: int(json.synced) };
   }
 
+  // The listing's entries of a slug. The Worker leaves a demo conference (demo: true) out of GET
+  // /api/conferences while it is not searchable (worker/src/directory.js), so for a document that
+  // says demo: true a slug the listing does not show can still have a directory row. GET
+  // /admin/stats?event= answers for any slug the directory holds (statsOf), so a demo it holds but
+  // does not list has a row that stores unavailable, and that is the entry returned for it.
+  async function listedEntries(slug, doc) {
+    const listed = (await conferenceList()).filter((c) => c.slug === slug);
+    if (listed.length || doc?.demo !== true) return listed;
+    return (await statsOf(slug)) ? [{ slug, status: 'unavailable', demo: true }] : [];
+  }
+
   async function writeConferenceDoc(slug, doc, mode) {
-    const current = (await conferenceList()).find((c) => c.slug === slug);
+    const current = (await listedEntries(slug, doc))[0];
     if (!current) throw new NotFoundError(`no conference ${slug} on this backend (GET /api/conferences does not list it)`);
     const wanted = `${doc.status}${doc.status_reason ? ` (${doc.status_reason})` : ''}`;
     if (mode === 'dry-run') return { summary: `would send ${slug} as ${wanted} to the Worker (now ${current.status})` };
@@ -846,7 +857,8 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
       const all = await conferenceList();
       const shown = options.all ? all : all.filter((c) => c.status === 'searchable');
       return {
-        items: shown.map((c) => ({ slug: c.slug, name: str(c.name), start_date: str(c.start_date), end_date: str(c.end_date), status: c.status === 'searchable' ? 'searchable' : 'unavailable', talks: int(c.talk_count) })),
+        // The demo conference (invented data) is listed with demo: true, as on tier 3.
+        items: shown.map((c) => ({ slug: c.slug, name: str(c.name), start_date: str(c.start_date), end_date: str(c.end_date), status: c.status === 'searchable' ? 'searchable' : 'unavailable', talks: int(c.talk_count), ...(c.demo === true ? { demo: true } : {}) })),
         counts: { shown: shown.length, total: all.length },
         summary: `${plural(shown.length, 'conference')}${options.all ? '' : ` searchable of ${all.length}`}`,
       };
@@ -933,13 +945,15 @@ export function createWorkerAdapter(backend, { credential, env = {}, spawn = def
     // live conference (DECISIONS.md, caddie-admin C1). The document also carries expect_status,
     // the status of the slug's directory row as this read found it: the listed status, or null
     // when the slug is not listed. GET /api/conferences lists every directory row, tombstoned or
-    // with a wiped object alike, with the status the row stores, so "not listed" is "no row". The
-    // Worker checks it in the upsert's transaction, so a removal or an unretire that lands between
-    // the read and the PUT answers 409 status_mismatch and nothing is written. A listing that
-    // shows the slug with a status a row never stores, or twice with two statuses, does not say
-    // what the row holds: the unretire is refused and nothing is sent.
+    // with a wiped object alike, with the status the row stores, so "not listed" is "no row", except
+    // for a demo conference that is not searchable, which the Worker leaves out: for a document that
+    // says demo: true, listedEntries asks the Worker whether it holds the slug. The Worker checks
+    // it in the upsert's transaction, so a removal or an unretire that lands between the read and
+    // the PUT answers 409 status_mismatch and nothing is written. A listing that shows the slug
+    // with a status a row never stores, or twice with two statuses, does not say what the row
+    // holds: the unretire is refused and nothing is sent.
     async unretireConference({ slug, doc, mode }) {
-      const listed = (await conferenceList()).filter((c) => c.slug === slug);
+      const listed = await listedEntries(slug, doc);
       const statusOf = (s) => (s === 'searchable' ? 'searchable' : 'unavailable');
       const sending = statusOf(doc.status);
       const wanted = `${sending}${typeof doc.status_reason === 'string' && /^[a-z_]{1,40}$/.test(doc.status_reason) ? ` (${doc.status_reason})` : ''}`;

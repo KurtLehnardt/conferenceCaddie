@@ -13,6 +13,8 @@
 // - Switching it off: a hidden demo deletes its presence (with the Bluetooth session), positions,
 //   Bluetooth caps, meets, nudges and nudge sends, keeps its profiles, and leaves the public list;
 //   a real conference's hide keeps everything; a removed demo leaves no row.
+// - The tier 2 CLI (scripts/admin/backends/worker.mjs) marks the demo in conferences list and still
+//   reaches a hidden demo, which the Worker no longer lists, for hide, unhide and unretire.
 //
 // Every request goes through the Worker's fetch handler, signed with the shared fixture's fake key,
 // to real objects on node:sqlite (helpers/harness.mjs), with fake embeddings (EMBED_FAKE). The demo
@@ -35,6 +37,8 @@ import { DEMO_GRACE_DAYS, conferenceVisibleUntilMs, visibleUntilMs } from '../sr
 import * as demoLib from '../../scripts/lib/demo-conference.mjs';
 import * as peopleShared from '../../server/people-shared.mjs';
 import { loadStoplist } from '../ingest/topics-local.mjs';
+import { createWorkerAdapter } from '../../scripts/admin/backends/worker.mjs';
+import { NotFoundError } from '../../scripts/admin/errors.mjs';
 
 const fixture = JSON.parse(readFileSync(new URL('../../test/fixtures/admin-sign.v1.json', import.meta.url), 'utf8'));
 const KEY = fixture.keys.key1;
@@ -602,5 +606,57 @@ describe('switching the demo off', { skip }, () => {
       assert.deepEqual(rows(ctx.db('directory:global'), 'SELECT slug FROM conferences'), []);
       assert.ok(!(await listed(ctx)).some((c) => c.slug === DEMO));
     });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+
+describe('the tier 2 CLI and a demo the Worker does not list', { skip }, () => {
+  const adapterFor = (ctx) => createWorkerAdapter({ name: 't2', tier: 2, api: BASE }, {
+    credential: KEY,
+    env: {},
+    fetch: (url, init) => quietly(() => worker.fetch(new Request(url, init), ctx.env)),
+  });
+
+  // The CLI signs with the real clock, so these tests do not fix it; the Worker does not read the
+  // demo's dates for these routes.
+  test('list marks the demo; hide, a repeated hide and unhide reach the hidden demo; a slug the Worker does not hold is still not found', async () => {
+    {
+      const ctx = realEnv();
+      await putConferences(ctx, [realConf(), demoConf(DAY)]);
+      const adapter = adapterFor(ctx);
+      const all = await adapter.listConferences({ options: { all: true } });
+      assert.deepEqual(all.items.find((c) => c.slug === DEMO), { slug: DEMO, name: ON.name, start_date: '2026-11-11', end_date: '2026-11-13', status: 'searchable', talks: buildDemo(ON, DAY).counts.talk, demo: true });
+      assert.ok(!('demo' in all.items.find((c) => c.slug === REAL)));
+
+      const first = await adapter.hideConference({ event: DEMO, slug: DEMO, mode: 'run', doc: hiddenDemo() });
+      assert.match(first.summary, /was searchable; 1 object synced/);
+      const again = await adapter.hideConference({ event: DEMO, slug: DEMO, mode: 'run', doc: hiddenDemo() });
+      assert.match(again.summary, /was unavailable; 1 object synced/);
+      assert.ok(!(await adapter.listConferences({ options: { all: true } })).items.some((c) => c.slug === DEMO));
+      await adapter.unhideConference({ event: DEMO, slug: DEMO, mode: 'run', doc: demoConf(DAY) });
+      assert.ok((await listed(ctx)).some((c) => c.slug === DEMO && c.status === 'searchable'));
+
+      const unknown = 'nowhere-demo-conference';
+      await assert.rejects(adapter.hideConference({ event: unknown, slug: unknown, mode: 'run', doc: { ...hiddenDemo(), slug: unknown } }), NotFoundError);
+      await assert.rejects(adapter.hideConference({ event: REAL2, slug: REAL2, mode: 'run', doc: realConf(REAL2, { status: 'unavailable' }) }), NotFoundError);
+    }
+  });
+
+  test('unretire expects the row of a removed demo that is back but hidden, rather than no row', async () => {
+    {
+      const ctx = realEnv();
+      await putConferences(ctx, [demoConf(DAY)]);
+      const adapter = adapterFor(ctx);
+      await adapter.removeConference({ event: DEMO, slug: DEMO, mode: 'run', options: {} });
+      const retired = demoConf(DAY, { status: 'unavailable', status_reason: 'operator_removed' });
+      // No row: expects null.
+      const firstUnretire = await adapter.unretireConference({ event: DEMO, slug: DEMO, mode: 'run', doc: retired });
+      assert.match(firstUnretire.summary, /expect_status: null/);
+      // The row is back, unavailable, and not listed: the repeat expects "unavailable" and applies.
+      assert.ok(!(await listed(ctx)).some((c) => c.slug === DEMO));
+      const repeat = await adapter.unretireConference({ event: DEMO, slug: DEMO, mode: 'run', doc: retired });
+      assert.match(repeat.summary, /expect_status: "unavailable"/);
+    }
   });
 });
