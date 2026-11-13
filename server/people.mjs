@@ -59,11 +59,11 @@ import { parseDevice, hashSecret, secretMatches, refFor } from './device.mjs';
 import { CONFERENCES_PREFERENCE, PEOPLE_PURGE_PREFERENCE, conferencePreference, peoplePreference, withPreference } from './preference.mjs';
 import { pauseSemantic, semanticAvailable, isInferenceFailure, esErrorInfo } from './semantic.mjs';
 import { reportCountsFor, HIDE_AT } from './report.mjs';
-import { PRESENCE_OFF, BLE_SESSION_OFF, BLE_CAPS_OFF, EXPIRED_CAPS_QUERY, PENDING_DELETE_QUERY, isPendingDelete, visibleUntil, dayBounds, DEMO_GRACE_DAYS } from './people-shared.mjs';
+import { PRESENCE_OFF, BLE_SESSION_OFF, BLE_CAPS_OFF, EXPIRED_CAPS_QUERY, PENDING_DELETE_QUERY, isPendingDelete, visibleUntil, dayBounds, dayEndAfter, nextDayStart, DEMO_GRACE_DAYS } from './people-shared.mjs';
 import { createProfileDelete, ownBlocksQuery } from './people-delete.mjs';
 
 // Re-exported, so the other server modules and the scripts that import them from here keep working.
-export { PRESENCE_OFF, BLE_SESSION_OFF, BLE_CAPS_OFF, EXPIRED_CAPS_QUERY, PENDING_DELETE_QUERY, isPendingDelete, visibleUntil, dayBounds };
+export { PRESENCE_OFF, BLE_SESSION_OFF, BLE_CAPS_OFF, EXPIRED_CAPS_QUERY, PENDING_DELETE_QUERY, isPendingDelete, visibleUntil, dayBounds, dayEndAfter, nextDayStart };
 
 import { ES_URL } from './es-url.mjs';
 const PEOPLE_KEY = process.env.ES_PEOPLE_API_KEY || '';

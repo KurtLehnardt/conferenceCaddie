@@ -53,8 +53,8 @@ async function call(obj, method, path, body, d) {
   return { status: res.status, json };
 }
 
-async function putConference(obj, endDate) {
-  const doc = { slug: SLUG, name: 'Fixture', status: 'searchable', start_date: '2099-06-01', end_date: endDate, time_zone: 'UTC' };
+async function putConference(obj, endDate, timeZone = 'UTC') {
+  const doc = { slug: SLUG, name: 'Fixture', status: 'searchable', start_date: '2099-06-01', end_date: endDate, time_zone: timeZone };
   const res = await obj.fetch(new Request('https://do.internal/internal/conference', {
     method: 'PUT', headers: { 'content-type': 'application/json', 'x-caddie-slug': SLUG }, body: JSON.stringify({ doc, route_prefix: '' }),
   }));
@@ -63,12 +63,13 @@ async function putConference(obj, endDate) {
 
 // A conference object with one person who is visible conference-wide and has no presence yet.
 // `writes` lists the statements that wrote the presence table, so a test can tell that no row was
-// written; `row()` is the stored presence row and `location()` the position held in memory.
-async function setup() {
+// written; `row()` is the stored presence row and `location()` the position held in memory. The
+// conference runs to 2099-06-02 in UTC unless `endDate` and `timeZone` say otherwise (null: none).
+async function setup({ endDate = '2099-06-02', timeZone = 'UTC' } = {}) {
   const writes = [];
   const state = fakeState({ onExec: (q) => { if (/^\s*(INSERT|UPDATE|DELETE)\b[^;]*\bpresence\b/i.test(q)) writes.push(q); } });
   const obj = new ConferenceDO(state, ENV);
-  await putConference(obj, '2099-06-02');
+  await putConference(obj, endDate, timeZone);
   const me = device('a');
   const profile = await call(obj, 'PUT', '/api/people/profile', {
     event: SLUG, profile: { display_name: 'Ada Lovelace', about: 'Ada works on schedulers.' }, open_to_meet: true, shared_talk_ids: [],
@@ -383,6 +384,79 @@ test("a kept Bluetooth token never outlives a kept end that the end of the confe
     assert.ok(row.ble_token, 'the session is kept');
     assert.equal(row.ble_token_until_ms, cap, 'its token ends with the lowered end');
   });
+});
+
+// A conference day ends at 23:59:59.000 in the conference's time zone; from then until midnight
+// its end has passed, and 'day' runs to the end of the next day instead of answering 400
+// "conference has ended". The same rule and cases as tier 3 (test/presence-keep-until.test.mjs).
+test("'day' in the last second of a conference day runs to the end of the next day, in the conference's time zone", { skip }, async () => {
+  const LA = 'America/Los_Angeles';
+  for (const [timeZone, clock, end] of [
+    ['UTC', '2099-11-12T10:00:00.000Z', '2099-11-12T23:59:59.000Z'],
+    ['UTC', '2099-11-12T23:59:58.999Z', '2099-11-12T23:59:59.000Z'],
+    ['UTC', '2099-11-12T23:59:59.000Z', '2099-11-13T23:59:59.000Z'],
+    ['UTC', '2099-11-12T23:59:59.500Z', '2099-11-13T23:59:59.000Z'],
+    ['UTC', '2099-11-12T23:59:59.999Z', '2099-11-13T23:59:59.000Z'],
+    ['UTC', '2099-11-13T00:00:00.000Z', '2099-11-13T23:59:59.000Z'],
+    ['UTC', '2099-11-30T23:59:59.500Z', '2099-12-01T23:59:59.000Z'],
+    [LA, '2099-11-12T23:59:59.500Z', '2099-11-13T07:59:59.000Z'],
+    [LA, '2099-11-13T07:59:58.999Z', '2099-11-13T07:59:59.000Z'],
+    [LA, '2099-11-13T07:59:59.000Z', '2099-11-14T07:59:59.000Z'],
+    [LA, '2099-11-13T07:59:59.999Z', '2099-11-14T07:59:59.000Z'],
+    [LA, '2099-11-13T08:00:00.000Z', '2099-11-14T07:59:59.000Z'],
+    [null, '2099-11-12T23:59:59.500Z', '2099-11-13T11:59:59.000Z'],
+    [null, '2099-11-13T11:59:59.500Z', '2099-11-14T11:59:59.000Z'],
+    [null, '2099-11-13T12:00:00.000Z', '2099-11-14T11:59:59.000Z'],
+  ]) {
+    const label = `${timeZone ?? 'no zone'} at ${clock}`;
+    await withFixedClock(Date.parse(clock), async () => {
+      const s = await setup({ endDate: '2099-12-31', timeZone });
+      // Turned on with a Bluetooth session, which ends with the presence at the latest.
+      const on = await s.put({ until: 'day', ble: true });
+      assert.equal(on.status, 200, `${label}: ${JSON.stringify(on.json)}`);
+      assert.equal(on.json.until, 'day');
+      assert.equal(on.json.presence_until, end, label);
+      assert.equal(on.json.presence_since, clock);
+      assert.ok(on.json.ble_key);
+      assert.equal(s.row().until_ms, Date.parse(end));
+      assert.ok(s.row().ble_token_until_ms <= Date.parse(end), `${label}: the token never outlives the presence`);
+      // A position fix sent with 'day' while it is on is the same mode and the same end
+      // (curMode), so it writes no presence row.
+      s.writes.length = 0;
+      const fix = await s.put({ until: 'day', location: HERE });
+      assert.equal(fix.status, 200, label);
+      assert.equal(fix.json.presence_until, end, label);
+      assert.equal(fix.json.located, true);
+      assert.deepEqual(s.writes, [], `${label}: a position-only 'day' write writes no presence row`);
+      // 'day' again while it is on: the same end, and since is kept.
+      const again = await s.put({ zone: 'Expo hall', until: 'day' });
+      assert.equal(again.status, 200, label);
+      assert.equal(again.json.presence_until, end, label);
+      assert.equal(again.json.presence_since, clock);
+    });
+  }
+});
+
+test("'day' on the last day of the conference stops at its end, and does not run on to the next day", { skip }, async () => {
+  const last = Date.parse('2099-06-01T23:59:58.999Z');
+  for (const after of [0, 1, 500, 1000]) {
+    await withFixedClock(T0, async (at) => {
+      // The person is visible until 2099-06-02; the operator then shortens the conference to end
+      // at 23:59:59 on 2099-06-01.
+      const s = await setup();
+      await putConference(s.obj, '2099-06-01');
+      at(last + after);
+      const res = await s.put({ until: 'day' });
+      if (after === 0) {
+        assert.equal(res.status, 200, JSON.stringify(res.json));
+        assert.equal(res.json.presence_until, '2099-06-01T23:59:59.000Z');
+      } else {
+        assert.equal(res.status, 400, `+${after} ms`);
+        assert.deepEqual(res.json, { error: 'conference has ended' });
+        assert.deepEqual(s.rows(), []);
+      }
+    });
+  }
 });
 
 test('an unknown mode names keep', { skip }, async () => {

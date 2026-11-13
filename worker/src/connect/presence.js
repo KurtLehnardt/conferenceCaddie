@@ -44,7 +44,7 @@
 // - Nothing from a request body, header or row is logged.
 
 import { HttpError, bad, json, readJson } from '../lib/http.js';
-import { dayBounds } from '../lib/time.js';
+import { dayEndAfter } from '../lib/time.js';
 import { afterPresence } from '../push/nudge.js';
 import { closeActiveMeetsOf } from './meets.js';
 import { HOUR_MS, iso, profileRequired, writer, line, distanceM } from './common.js';
@@ -143,10 +143,10 @@ async function putPresence(ctx, req) {
   const cur = around ? me.presence : null;
   const end = Number.isFinite(ctx.conf.visible_until_ms) ? ctx.conf.visible_until_ms : Infinity;
   // 'hour' runs out in 60 minutes; 'day' at the end of the conference day (its time zone), when
-  // the client's zone confirmation does the safeguarding instead. 'keep' keeps the stored end,
-  // which it may only lower to the end of the conference, never raise. Never past the conference
-  // end.
-  const dayUntil = Math.min(dayBounds(now, ctx.conf.time_zone).end, end);
+  // the client's zone confirmation does the safeguarding instead; from 23:59:59 until midnight,
+  // at the end of the next day (dayEndAfter). 'keep' keeps the stored end, which it may only lower
+  // to the end of the conference, never raise. Never past the conference end.
+  const dayUntil = Math.min(dayEndAfter(now, ctx.conf.time_zone), end);
   const untilMs = mode === 'keep' ? Math.min(cur.until_ms, end)
     : mode === 'day' ? dayUntil : Math.min(now + PRESENCE_MS, end);
   if (untilMs <= now) throw bad('conference has ended');
@@ -154,7 +154,8 @@ async function putPresence(ctx, req) {
   // A spot line hidden after reports stays off until the operator unhides it.
   const storedSpot = me.spot_hidden ? null : spot;
   const held = Boolean(storedSpot) && spotPending;
-  // The mode is not stored: a presence whose end is today's end of day was set with 'day'.
+  // The mode is not stored: a presence whose end is the end 'day' gives now (dayUntil) was set
+  // with 'day'.
   const curMode = cur ? (cur.until_ms === dayUntil ? 'day' : 'hour') : null;
   const explicit = body.location === undefined || body.location === null;
   const bleChange = body.ble === true || (body.ble === false && Boolean(cur?.ble_token || cur?.presence_nonce));

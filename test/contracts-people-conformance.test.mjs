@@ -382,6 +382,9 @@ test('presence with Bluetooth (server-rotate without a master keyring), rotation
   assert.equal(on.located, true);
   const theirs = conforms('PUT', '/api/presence', await call('PUT', '/api/presence', { device: other, body: { event: EVENT, zone: 'Hall A', location: here, ble: true } }));
   conforms('PUT', '/api/presence', await call('PUT', '/api/presence', { device: third, body: { event: EVENT, zone: 'Expo hall', until: 'day' } }));
+  // 'day' ends at 23:59:59 UTC (the conference's zone), which may be moments away when the suite
+  // runs then; the asks below need the third person around, so an hour from now follows.
+  conforms('PUT', '/api/presence', await call('PUT', '/api/presence', { device: third, body: { event: EVENT, zone: 'Expo hall', until: 'hour' } }));
 
   conforms('POST', '/api/presence/ble/rotate', await call('POST', '/api/presence/ble/rotate', { device: me, body: { event: EVENT } }));
 

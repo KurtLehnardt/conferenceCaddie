@@ -39,7 +39,7 @@ Two tests hold the freeze in place. `test/contracts-people-api.test.mjs` checks 
 | 410 | `over` | `state` | The meet is no longer open. |
 | 413 | `Request body is too large` | | |
 | 415 | `Content-Type must be application/json` | | |
-| 429 | `paused` | `message`, `retry_at` | Three declines today; with `Retry-After` until the end of the conference day. |
+| 429 | `paused` | `message`, `retry_at` | Three declines today; `retry_at` and `Retry-After` are midnight in the conference's time zone, when the count starts again. |
 | 429 | `Too many requests` | | Over a rate limit; with `Retry-After` in seconds. |
 | 502 | `People are temporarily unavailable` | | The store failed. Its own error is never forwarded. |
 
@@ -115,7 +115,7 @@ Request and response shapes are the named `$defs` entries; the route table lists
 
 ## Keeping the end of presence (`until: "keep"`, optional)
 
-`until` is a mode, not a time: `hour` (the default, also for `null`) sets `presence_until` to 60 minutes from now and `day` to the end of the conference day, so every write with either starts the end again. A write the app makes on its own while presence is on (a Bluetooth write, a re-key, a position fix) would therefore make the person visible for longer than they chose. A backend whose capabilities say `people.presence_keep_until: true` (tier 3 and tier 2) also takes `until: "keep"`:
+`until` is a mode, not a time: `hour` (the default, also for `null`) sets `presence_until` to 60 minutes from now and `day` to the end of the conference day (23:59:59 in its time zone; from 23:59:59 until midnight, the end of the next day), so every write with either starts the end again. A write the app makes on its own while presence is on (a Bluetooth write, a re-key, a position fix) would therefore make the person visible for longer than they chose. A backend whose capabilities say `people.presence_keep_until: true` (tier 3 and tier 2) also takes `until: "keep"`:
 
 - **It keeps the stored `presence_until`** exactly (never past the end of the conference), and `presence_since` with it. Everything else in the body applies as with `hour` or `day`: `zone`, `spot` and `location` replace the stored ones, and `ble: true` starts a new Bluetooth session that ends with the kept `presence_until` (a re-key, [ble-tokens.md](ble-tokens.md)), `ble: false` ends it, and no `ble` leaves it as it is.
 - **It never starts presence.** With no presence stored, or one whose `presence_until` has passed, the answer is 400 `{ "error": "presence_not_active", "message": "until: 'keep' needs presence that is on; turn it on with 'hour' or 'day'." }` and nothing is written.
