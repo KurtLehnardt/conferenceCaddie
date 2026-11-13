@@ -217,7 +217,14 @@ export function withConferenceFiles(adapter, { root, now = () => new Date(), tie
       const operator = readOperatorFile(root);
       const recorded = !!operator.removed[slug];
       if (!recorded && tier !== 2) throw new NotFoundError(`${slug} is not removed (no entry in ${OPERATOR_FILE})`);
-      const local = readConference(root, slug);
+      // The demo's document is the generator's, as for hide and unhide (a fresh clone has no local
+      // file), written as a remove leaves a conference's file: unavailable, operator_removed. So on
+      // tier 2 the unretire brings its row back unlisted, as the Worker lists no hidden demo, and
+      // `conferences refresh` makes it searchable, as for any conference; the document carries
+      // demo: true, so the tier 2 adapter can tell that row from no row. Tier 3 ignores the
+      // document.
+      const generated = generatedDemo(root, slug);
+      const local = generated ? { ...generated, status: 'unavailable', status_reason: REMOVED } : readConference(root, slug);
       if (!recorded && !local) throw new NotFoundError(`${slug} has no removed entry in ${OPERATOR_FILE} and no ${rel(confPath(root, slug))}; check the slug`);
       const backend = await adapter.unretireConference({ event, slug, mode, doc: local ?? { slug } });
       const items = [...(backend.items ?? []), { file: OPERATOR_FILE, removed: null, recorded }];

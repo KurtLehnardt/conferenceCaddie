@@ -466,10 +466,13 @@ async function handleAdmin(request, env, url, header) {
     let dailyLimitRetry = null;
     for (const c of docs) {
       const unretired = Number.isSafeInteger(c.unretired) && c.unretired > 0;
+      // doc_seq: the number of the directory row's last write, so the object ignores this document
+      // when a later one reached it first (two requests whose fan-outs arrive out of order).
+      const docSeq = Number.isSafeInteger(c.doc_seq) && c.doc_seq > 0 ? c.doc_seq : null;
       const r = await callDo(conferenceStub(env, c.slug), 'https://conference.internal/internal/conference', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'X-Caddie-Slug': c.slug },
-        body: JSON.stringify({ doc: c.doc, route_prefix: c.route_prefix, ...(unretired ? { unretired: c.unretired } : {}) }),
+        body: JSON.stringify({ doc: c.doc, route_prefix: c.route_prefix, ...(unretired ? { unretired: c.unretired } : {}), ...(docSeq ? { doc_seq: docSeq } : {}) }),
       });
       if (r.ok) {
         synced += 1;
@@ -733,8 +736,13 @@ async function runCron(env) {
   const { targets, day: usageDay, usage } = await res.json();
   const day = utcDay(Date.now());
   const prev = usageDay === day && isPlainObject(usage) ? usage : {};
+  // Every conference's usage, the demo conference's included, counts in every other conference's
+  // others: the account's Free-plan limits are shared, so a real conference's pace and soft caps
+  // must see the demo's load. The demo has its own allotment besides (lib/meter.js setShare), and
+  // GET /admin/stats leaves its usage out of the totals it shows (directory.js #stats).
   const results = {};
   const holds = {};
+  let answered = 0;
   await Promise.all(
     targets.map(async ({ slug }) => {
       const others = { requests: 0, rows_read: 0, rows_written: 0 };
@@ -752,6 +760,7 @@ async function runCron(env) {
         });
         if (r.ok) {
           const u = await r.json();
+          answered += 1;
           results[slug] = { day: u.day, requests: u.requests, rows_read: u.rows_read, rows_written: u.rows_written };
           if (Number.isFinite(u.holds)) holds[slug] = u.holds;
         }
@@ -765,5 +774,5 @@ async function runCron(env) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ day, usage: results, holds }),
   });
-  console.log(`cron conferences=${targets.length} answered=${Object.keys(results).length}`);
+  console.log(`cron conferences=${targets.length} answered=${answered}`);
 }

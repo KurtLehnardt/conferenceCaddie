@@ -37,6 +37,14 @@ const WINDOW_MIN = 10;
 const FIELDS = ['requests', 'rows_read', 'rows_written'];
 
 const num = (v, d) => (Number.isFinite(Number(v)) && v !== undefined && v !== null && v !== '' ? Number(v) : d);
+
+// The share of each daily budget the demo conference's own usage may take (env.DEMO_SHARE, a
+// number above 0 and at most 1; wrangler.toml sets it). Any other value is this default.
+export const DEFAULT_DEMO_SHARE = 0.1;
+export function demoShareOf(env = {}) {
+  const v = Number.parseFloat(String(env.DEMO_SHARE ?? ''));
+  return Number.isFinite(v) && v > 0 && v <= 1 ? v : DEFAULT_DEMO_SHARE;
+}
 const zero = (day) => ({ day, requests: 0, rows_read: 0, rows_written: 0 });
 const isEmpty = (d) => FIELDS.every((f) => !d[f]);
 // The first day whose usage_days row is kept: yesterday.
@@ -93,7 +101,8 @@ export class Meter {
   // sql: the unmetered storage.sql.exec. The meter's own writes go through it and add their own
   // cost to the deltas they write, so each write is counted in the totals it stores.
   // exec: the metered exec, for the cron's sweep, whose rows reach the meter like any other.
-  // env: DAILY_REQUEST_BUDGET, ROWS_READ_SOFT_CAP and ROWS_WRITTEN_SOFT_CAP.
+  // env: DAILY_REQUEST_BUDGET, ROWS_READ_SOFT_CAP and ROWS_WRITTEN_SOFT_CAP (and DEMO_SHARE,
+  // which the ConferenceDO reads for setShare).
   constructor({ sql, exec, env = {}, now = Date.now() }) {
     this.sql = sql;
     this.exec = exec;
@@ -114,6 +123,8 @@ export class Meter {
     this.cost = { read: 1, written: 1 };
     this.others = zero(day);
     this.othersGrowth = 0; // growth of others.requests between the last two cron calls
+    // The demo conference's allotment (setShare), or null for every other conference.
+    this.share = null;
     this.minutes = new Map(); // minute index -> requests
     this.sinceFlush = 0;
     // 0, so a fresh instance writes after its first request: instances can live well under
@@ -254,6 +265,34 @@ export class Meter {
     this.others = next;
   }
 
+  // The demo conference (invented data) gets its own allotment besides the account-wide budgets:
+  // its own usage may take `share` of each (DEMO_SHARE, ConferenceDO sets it from its document),
+  // so a busy demonstration slows itself down, and then stops writing, long before it could
+  // crowd out a real conference. The account-wide checks still apply to it too; its usage is in
+  // every real conference's others, so they still see the account's true load. null removes it.
+  setShare(share) {
+    this.share = Number.isFinite(share) && share > 0 && share <= 1 ? share : null;
+  }
+
+  // The allotment's limits: share times each daily budget, or null without a share.
+  #allotment() {
+    if (!this.share) return null;
+    return {
+      requests: this.share * num(this.env.DAILY_REQUEST_BUDGET, 70_000),
+      rows_read: this.share * num(this.env.ROWS_READ_SOFT_CAP, 3_500_000),
+      rows_written: this.share * num(this.env.ROWS_WRITTEN_SOFT_CAP, 85_000),
+    };
+  }
+
+  // True once a demo conference's own usage has used up its allotment of requests or of written
+  // rows: the object then refuses its public writes with 503 daily_limit (ConferenceDO).
+  allotmentSpent(now = Date.now()) {
+    const a = this.#allotment();
+    if (!a) return false;
+    const own = this.current(now);
+    return own.requests >= a.requests || own.rows_written >= a.rows_written;
+  }
+
   global(now = Date.now()) {
     const own = this.current(now);
     return {
@@ -263,24 +302,36 @@ export class Meter {
     };
   }
 
-  // The request pace clients multiply their poll intervals by: 1 (normal) to 10 (slowest).
+  // The request pace clients multiply their poll intervals by: 1 (normal) to 10 (slowest). For a
+  // demo conference, the slower of the account-wide pace and the pace of its own allotment, which
+  // counts only its own requests.
   pace(now = Date.now()) {
-    const budget = num(this.env.DAILY_REQUEST_BUDGET, 70_000);
-    const left = budget - this.global(now).requests;
+    const shared = this.#paceOf(num(this.env.DAILY_REQUEST_BUDGET, 70_000), this.global(now).requests, this.othersGrowth, now);
+    const a = this.#allotment();
+    if (!a) return shared;
+    return Math.max(shared, this.#paceOf(a.requests, this.current(now).requests, 0, now));
+  }
+
+  #paceOf(budget, used, growth, now) {
+    const left = budget - used;
     if (left < 0.02 * budget) return 10;
     let recent = 0;
     const m = Math.floor(now / 60_000);
     for (const [k, n] of this.minutes) if (k > m - WINDOW_MIN) recent += n;
-    const projected = ((recent + this.othersGrowth) * secondsUntilUtcMidnight(now)) / 600;
+    const projected = ((recent + growth) * secondsUntilUtcMidnight(now)) / 600;
     const pace = Math.min(10, Math.max(1, projected / Math.max(left, 1)));
     return Math.round(pace * 10) / 10;
   }
 
   lexicalAllowed(now = Date.now()) {
-    return this.global(now).rows_read < num(this.env.ROWS_READ_SOFT_CAP, 3_500_000);
+    if (this.global(now).rows_read >= num(this.env.ROWS_READ_SOFT_CAP, 3_500_000)) return false;
+    const a = this.#allotment();
+    return !a || this.current(now).rows_read < a.rows_read;
   }
 
   writesAllowed(now = Date.now()) {
-    return this.global(now).rows_written < num(this.env.ROWS_WRITTEN_SOFT_CAP, 85_000);
+    if (this.global(now).rows_written >= num(this.env.ROWS_WRITTEN_SOFT_CAP, 85_000)) return false;
+    const a = this.#allotment();
+    return !a || this.current(now).rows_written < a.rows_written;
   }
 }

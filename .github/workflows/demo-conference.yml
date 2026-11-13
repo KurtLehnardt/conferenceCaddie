@@ -25,11 +25,26 @@
 #   Without the two settings the job only logs a notice. The first index of the demo, with its topics
 #   and facets, is the operator's `caddie-admin conferences add --event <demo slug>`
 #   (docs/ADMIN_CLI.md, "The demo conference").
+# - worker (tier 2), only where the repository variable CADDIE_API_BASE exists:
+#   - with the demo on, the secret CADDIE_ADMIN_TOKEN set (the two ingest.yml uses) and no ingest.yml
+#     run queued or running (it pushes to the Worker itself), builds today's demo files with
+#     scripts/ingest.mjs --event <demo slug> --dry-run (no Elasticsearch, no network call) and pushes
+#     them with worker/ingest/push-ingest.mjs --events-from its report --refresh-only: only while the
+#     Worker's GET /api/conferences lists the demo as searchable, and each document with
+#     expect_status "searchable", so a refresh never adds the demo, shows a hidden one again or
+#     brings back a removed one, even one hidden while the run is going (it logs a notice instead).
+#     The talk ids never change, so finalize deletes nothing and nobody's shared talks change; the
+#     topic list the Worker holds is kept. The optional Cloudflare Access token of ingest.yml goes to
+#     the push step too.
+#   - with the demo off, reads the Worker's public conference list, with no token, and warns when it
+#     still lists the demo as searchable (scripts/demo-conference.mjs worker-check).
+#   The job installs nothing, so no third-party code runs next to the token. The first push of the
+#   demo, which builds its topics, is the operator's `caddie-admin conferences add --event <demo
+#   slug>` on tier 2, which runs ingest.yml for it.
 # - pages: when the live bundles are stale (the demo is on and missing or dated another day, or it is
 #   off, hidden or removed and still listed) and no ingest.yml or pages.yml run is queued or running,
 #   calls pages.yml, which regenerates the demo for today and publishes it with the vectors already
 #   published (demo_refresh), or drops it.
-# The Worker (tier 2) is not refreshed here.
 #
 # GitHub disables scheduled workflows after 60 days without repository activity; run this one by
 # hand to enable it again.
@@ -59,6 +74,7 @@ jobs:
       slug: ${{ steps.status.outputs.slug }}
       stale: ${{ steps.status.outputs.stale }}
       busy: ${{ steps.busy.outputs.busy }}
+      ingest_busy: ${{ steps.busy.outputs.ingest_busy }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -89,6 +105,8 @@ jobs:
 
       # An ingest.yml or pages.yml run that is queued or running publishes the bundles with today's
       # demo itself; a call queued now could replace a pending one of theirs in the "pages" group.
+      # An ingest.yml run also pushes to the Worker (tier 2), so the worker job waits for the next
+      # run then (ingest_busy).
       - name: Look for a publishing run in progress
         id: busy
         env:
@@ -96,11 +114,17 @@ jobs:
         run: |
           set -euo pipefail
           busy=false
+          ingest_busy=false
           for wf in ingest.yml pages.yml; do
             n=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$wf/runs?per_page=20" --jq '[.workflow_runs[] | select(.status != "completed")] | length')
-            if [ "$n" != "0" ]; then busy=true; echo "::notice::$wf has $n run(s) queued or running; the demo bundles are left to it."; fi
+            if [ "$n" != "0" ]; then
+              busy=true
+              if [ "$wf" = "ingest.yml" ]; then ingest_busy=true; fi
+              echo "::notice::$wf has $n run(s) queued or running; the demo bundles are left to it."
+            fi
           done
           echo "busy=$busy" >> "$GITHUB_OUTPUT"
+          echo "ingest_busy=$ingest_busy" >> "$GITHUB_OUTPUT"
 
   # Only where tier 3 is set up (the variable exists), so other repositories never create the
   # environment or a deployment record.
@@ -147,6 +171,70 @@ jobs:
           else
             node scripts/demo-conference.mjs es-check
           fi
+
+  # Only where tier 2 is set up (the variable exists).
+  worker:
+    needs: check
+    if: vars.CADDIE_API_BASE != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # The admin token is in the environment of this step and of the push step only, as in
+      # ingest.yml (the optional Cloudflare Access token in the push step only). Their values are
+      # never printed; push-ingest.mjs signs every admin request with the token and never sends it.
+      # An ingest.yml run that is queued or running pushes to the Worker itself, so this run waits.
+      - name: Check the configuration
+        id: config
+        if: needs.check.outputs.enabled == 'true'
+        env:
+          ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}
+          INGEST_BUSY: ${{ needs.check.outputs.ingest_busy }}
+        run: |
+          if [ -z "$ADMIN_TOKEN" ]; then
+            echo "::notice::Skipping the Worker: the CADDIE_ADMIN_TOKEN secret is not set (tier 2 is not configured for the demo)."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          elif [ "$INGEST_BUSY" = "true" ]; then
+            echo "::notice::Skipping the Worker: an ingest.yml run is queued or running, and it pushes to the Worker itself; the next run refreshes the demo."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.config.outputs.ready == 'true' || needs.check.outputs.enabled != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - if: steps.config.outputs.ready == 'true' || needs.check.outputs.enabled != 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      # No key and no network call: the demo is generated, and its files are written under data/.
+      - name: Build the demo conference files
+        if: steps.config.outputs.ready == 'true'
+        env:
+          SLUG: ${{ needs.check.outputs.slug }}
+        run: node scripts/ingest.mjs --event "$SLUG" --dry-run --skip-topics --report "$RUNNER_TEMP/demo-report.json"
+
+      # Node built-ins only: nothing is installed, so no third-party code runs next to the token.
+      # --refresh-only: only while the Worker lists the demo as searchable, each document with
+      # expect_status (a notice otherwise).
+      - name: Refresh the demo conference on the Worker
+        if: steps.config.outputs.ready == 'true'
+        env:
+          CADDIE_API_BASE: ${{ vars.CADDIE_API_BASE }}
+          ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: node worker/ingest/push-ingest.mjs --api "$CADDIE_API_BASE" --events-from "$RUNNER_TEMP/demo-report.json" --refresh-only
+
+      # No token: the public conference list only.
+      - name: Warn when the demo is off but the Worker still lists it
+        if: needs.check.outputs.enabled != 'true'
+        env:
+          CADDIE_API_BASE: ${{ vars.CADDIE_API_BASE }}
+        run: node scripts/demo-conference.mjs worker-check
 
   # The permissions are the ceiling for the called jobs, which narrow them, as in ingest.yml.
   pages:

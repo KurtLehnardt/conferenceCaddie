@@ -103,7 +103,7 @@ describe('the admin nonce table', { skip }, () => {
   test('the same nonce twice on PUT /admin/conferences: 200, then 401 admin_replay, and the directory upserts and fans out once', async () => {
     const ctx = realEnv();
     const req = signed('PUT', '/admin/conferences', { body: JSON.stringify({ conferences: [conf(SLUG)] }) });
-    const upserts = () => ctx.directorySql.filter((q) => q.startsWith('SELECT slug, doc, route_prefix, has_object FROM conferences')).length;
+    const upserts = () => ctx.directorySql.filter((q) => q.startsWith('SELECT slug, doc, route_prefix, has_object, doc_seq FROM conferences')).length;
     const fanOut = () => ctx.CONFERENCE.calls.filter((c) => new URL(c.req.url).pathname === '/internal/conference').length;
     const first = await call(ctx.env, req.build());
     assert.deepEqual([first.status, first.json], [200, { upserted: 1, searchable: 1, synced: 1, skipped_retired: [] }]);
@@ -175,7 +175,7 @@ describe('the admin nonce table', { skip }, () => {
       headers: { 'content-type': 'application/json', 'x-caddie-admin-nonce': nonce(), 'x-caddie-admin-ts': String(ts) },
       body: JSON.stringify({ conferences: [conf(SLUG)] }),
     }));
-    const upserts = () => dirSql.filter((q) => q.startsWith('SELECT slug, doc, route_prefix, has_object FROM conferences')).length;
+    const upserts = () => dirSql.filter((q) => q.startsWith('SELECT slug, doc, route_prefix, has_object, doc_seq FROM conferences')).length;
     try {
       await withFixedClock(T * 1000 + 999, async () => {
         for (const send of [toConference, toDirectory]) {
@@ -224,7 +224,7 @@ describe('the admin nonce table', { skip }, () => {
     const sql = [];
     const state = fakeState({ onExec: (q) => sql.push(q) });
     const dir = new DirectoryDO(state, {});
-    const upserts = () => sql.filter((q) => q.startsWith('SELECT slug, doc, route_prefix, has_object FROM conferences')).length;
+    const upserts = () => sql.filter((q) => q.startsWith('SELECT slug, doc, route_prefix, has_object, doc_seq FROM conferences')).length;
     const send = (nonce, ts) => dir.fetch(new Request('https://directory.internal/admin/conferences', {
       method: 'PUT',
       headers: { 'content-type': 'application/json', 'x-caddie-admin-nonce': nonce, 'x-caddie-admin-ts': String(ts) },
@@ -285,7 +285,7 @@ describe('the admin nonce table', { skip }, () => {
     // direct pruned-nonce test.
     await withClock(async (setOffset) => {
       const ctx = realEnv();
-      const upserts = () => ctx.directorySql.filter((q) => q.startsWith('SELECT slug, doc, route_prefix, has_object FROM conferences')).length;
+      const upserts = () => ctx.directorySql.filter((q) => q.startsWith('SELECT slug, doc, route_prefix, has_object, doc_seq FROM conferences')).length;
       const body = JSON.stringify({ conferences: [conf(SLUG)] });
       const req = signed('PUT', '/admin/conferences', { body });
       assert.equal((await call(ctx.env, req.build())).status, 200);

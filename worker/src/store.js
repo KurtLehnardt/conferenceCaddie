@@ -14,13 +14,16 @@ import { HttpError, forbidden } from './lib/http.js';
 import { hashSecret, secretMatches, refFor, sha256Hex } from './lib/device.js';
 import { toBlob, fromBlob } from './lib/vectors.js';
 import { embedPassages, semanticAvailable, EmbedUnavailable, conventionsId, documentText } from './lib/embed.js';
-import { visibleUntilMs } from './lib/time.js';
+import { conferenceVisibleUntilMs } from './lib/time.js';
 import { stripControls } from './lib/text.js';
 
 // Zones a person can say they are in, besides the conference's room names.
 export const FIXED_ZONES = ['Expo hall', 'Registration', 'Food and coffee', 'Hallway', 'Outside'];
 // Distinct reporters at which a target is hidden from everyone but its owner.
 export const HIDE_AT = 2;
+// The tables clearLiveActivity empties: what a person does at the conference now, as opposed to
+// who they are (their profile, shared talks, blocks, reports and push subscriptions).
+export const LIVE_TABLES = Object.freeze(['presence', 'ble_caps', 'meets', 'nudges', 'nudge_sends']);
 // The reporter_id of the operator's own report (POST /admin/people/block, and POST /admin/moderation
 // with action "hide"). One such report reaches HIDE_AT on its own. A device's profile_id is 22
 // characters, so no device can report under this id.
@@ -463,7 +466,7 @@ export class Store {
       sample: doc.sample === true || doc.sample === 1,
       hidden: doc.hidden === true || doc.hidden === 1,
       spot_hidden: doc.spot_hidden === true || doc.spot_hidden === 1,
-      visible_until_ms: Number.isFinite(doc.visible_until_ms) ? doc.visible_until_ms : conf?.visible_until_ms ?? visibleUntilMs(conf?.end_date, conf?.time_zone),
+      visible_until_ms: Number.isFinite(doc.visible_until_ms) ? doc.visible_until_ms : conf?.visible_until_ms ?? conferenceVisibleUntilMs(conf?.doc),
       updated_at_ms: Number.isFinite(doc.updated_at_ms) ? doc.updated_at_ms : now,
     };
     p.text_hash = await textHashOf(p);
@@ -684,6 +687,23 @@ export class Store {
     else this.locations.delete(id);
     const p = this.peopleC?.byId.get(id);
     if (p?.presence) p.presence.location = loc ?? null;
+  }
+
+  // Deletes everything live of the conference's people, for a demo conference that is switched
+  // off (ConferenceDO #clearDemo): every presence row, with its zone, spot line and Bluetooth
+  // session (ble_token, presence_nonce, ble_master_id), every position held in memory, the
+  // Bluetooth caps record of whom sightings returned to whom, every meet (the inbox), and every
+  // nudge and nudge send. Profiles, shared talks, blocks, reports and push subscriptions stay, as
+  // a hide keeps a conference's data (tier 3's clearDemoActivity keeps them too). It runs in one
+  // transaction of its own. Returns the number of rows deleted per table.
+  clearLiveActivity() {
+    const out = {};
+    this.tx(() => {
+      for (const t of LIVE_TABLES) out[t] = this.#count(`DELETE FROM ${t} RETURNING 1`);
+    });
+    this.locations.clear();
+    if (this.peopleC) for (const p of this.peopleC.byId.values()) p.presence = null;
+    return out;
   }
 
   // ------------------------------------------------------------------------------------------

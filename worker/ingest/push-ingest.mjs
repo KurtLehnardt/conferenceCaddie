@@ -3,11 +3,19 @@
 //
 // Usage:
 //   node worker/ingest/push-ingest.mjs --api <base> [--event <slug> ... | --events-from <file>] [--dry-run]
-//                                      [--rebuild-topics] [--allow-shrink] [--allow-empty] [--report <file>]
+//                                      [--rebuild-topics] [--allow-shrink] [--allow-empty] [--refresh-only]
+//                                      [--report <file>]
 // --allow-shrink lets finalize delete more than 10 talks and more than 10% of a conference's talks,
 // which the Worker otherwise refuses (409) so a short feed cannot erase people's sharing.
 // --allow-empty lets a rebuilt topic list with no topics replace a stored one, which the Worker
 // (and resolveTopics, before any talk or topic is sent) otherwise refuses.
+// --refresh-only pushes only the selected conferences that the Worker lists as searchable now
+// (GET /api/conferences), and skips every other one with a notice, so a scheduled refresh never
+// adds a conference, shows a hidden one again or brings back a removed one: the demo conference's
+// daily refresh (.github/workflows/demo-conference.yml) uses it. Each document then goes in a
+// request of its own with "expect_status": "searchable", so one hidden or removed between the
+// list and the write is not written either (409 status_mismatch: a notice, and none of its talks
+// are pushed). When the list cannot be read, nothing is pushed and the run fails.
 // Env: ADMIN_TOKEN, or ADMIN_TOKEN_FILE naming a file that holds it (not needed with --dry-run).
 //
 // Steps:
@@ -56,7 +64,7 @@
 // Worker now serves.
 
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ROOT, TALK_BATCH, UsageError, adminClient, chunk, drainPending, isSlug, normalizeApiBase, parseArgs, readAdminToken, readNdjson, warnRemovedSigVersion, withTopics, withoutOperatorKeys } from './lib.mjs';
 import { resolveTopics, loadStoplist } from './topics-local.mjs';
@@ -66,7 +74,9 @@ import { CONVENTIONS } from '../src/lib/embed.js';
 import { applyTakedowns, loadTakedowns } from '../../scripts/build-bundles.mjs';
 import { contentHash } from '../../scripts/lib/hash.mjs';
 
-const DATA = join(ROOT, 'data');
+// CADDIE_DATA_DIR (optional) reads the conference files there instead of data/, as
+// scripts/ingest.mjs does; the tests point both at a temporary folder.
+const DATA = process.env.CADDIE_DATA_DIR ? resolve(process.env.CADDIE_DATA_DIR) : join(ROOT, 'data');
 
 // The model block of the talk bundles (contracts/js/bundle.mjs MODEL) must be the one the Worker
 // embeds under (src/lib/embed.js CONVENTIONS), or the Worker's query vectors would not match the
@@ -222,24 +232,86 @@ export function planPush({ sent, searchable, skipped }) {
   };
 }
 
-// The slugs the Worker lists as searchable (GET /api/conferences), or an empty set when it cannot
-// say, in which case nothing is kept back.
-async function liveSearchable(api) {
+/**
+ * The slugs the Worker lists as searchable (GET /api/conferences), or null when it cannot say (no
+ * answer, a status other than 200, or no conferences list). Only well-formed slugs are kept.
+ */
+export async function listedSearchable(api, fetchFn = (...a) => fetch(...a)) {
   try {
-    const res = await fetch(`${api}/api/conferences`, { signal: AbortSignal.timeout(15_000) });
-    if (!res.ok) return new Set();
+    const res = await fetchFn(`${api}/api/conferences`, { signal: AbortSignal.timeout(15_000) });
+    if (res.status !== 200) return null;
     const { conferences } = await res.json();
-    return new Set((conferences ?? []).filter((c) => c?.status === 'searchable').map((c) => c.slug));
+    if (!Array.isArray(conferences)) return null;
+    return new Set(conferences.filter((c) => c?.status === 'searchable' && typeof c.slug === 'string' && isSlug(c.slug)).map((c) => c.slug));
   } catch {
-    return new Set();
+    return null;
   }
+}
+
+// The slugs the Worker lists as searchable, or an empty set when it cannot say, in which case
+// nothing is kept back.
+async function liveSearchable(api) {
+  return (await listedSearchable(api)) ?? new Set();
+}
+
+/**
+ * --refresh-only: of the conference documents to push, those whose slug the Worker lists as
+ * searchable (`listed`, from listedSearchable). Returns { push, skipped }: the documents to push and
+ * the slugs left out. A null `listed` (the list could not be read) throws, so nothing is pushed on
+ * a guess.
+ */
+export function refreshOnly(confs, listed) {
+  if (!(listed instanceof Set)) throw new Error('--refresh-only: GET /api/conferences could not be read, so nothing was pushed.');
+  return { push: confs.filter((c) => listed.has(c.slug)), skipped: confs.filter((c) => !listed.has(c.slug)).map((c) => c.slug) };
+}
+
+/**
+ * --refresh-only's upsert: each conference document goes in a request of its own with
+ * "expect_status": "searchable" after conferenceForWorker (which strips any expect_status a file
+ * holds), so the directory writes it only while the slug's row is still searchable, checked inside
+ * its transaction. A conference hidden, removed or otherwise changed since the list was read
+ * answers 409 status_mismatch and is written nowhere: it is reported with a notice and left out.
+ * A slug the Worker skipped as removed (skipped_retired, a removal that has not finished) is
+ * logged as upsertConferences logs it. Returns { upserted, changed, skipped }: the number of
+ * documents the Worker stored, the slugs that changed during the run and the slugs it skipped as
+ * removed. Any other failure throws.
+ */
+export async function upsertRefreshing(admin, confs, { prepared = new Map(), log = console.log, note = notice } = {}) {
+  let upserted = 0;
+  const changed = [];
+  const skipped = [];
+  for (const c of confs) {
+    let r;
+    try {
+      r = await admin('PUT', '/admin/conferences', { conferences: [{ ...conferenceForWorker(c, prepared.get(c.slug)), expect_status: 'searchable' }] });
+    } catch (e) {
+      if (e?.status !== 409 || e.body?.error !== 'status_mismatch') throw e;
+      changed.push(c.slug);
+      if (isSlug(c.slug)) note(`${c.slug}: skipped, it changed on the Worker during this run and is no longer listed as searchable, so nothing of it was pushed.`);
+      continue;
+    }
+    upserted += Number(r?.upserted) || 0;
+    for (const slug of Array.isArray(r?.skipped_retired) ? r.skipped_retired : []) {
+      if (typeof slug !== 'string' || !isSlug(slug) || skipped.includes(slug)) continue;
+      skipped.push(slug);
+      log(`${slug}: skipped, the Worker holds it as removed (DELETE /admin/conference); its talks are not pushed.`);
+    }
+  }
+  log(`Conferences upserted: ${upserted}.`);
+  return { upserted, changed, skipped };
+}
+
+// A line for the run's log; in GitHub Actions also a notice annotation. Callers pass only fixed
+// text and well-formed slugs, so the line holds no newline or workflow command of its own.
+function notice(line) {
+  console.log(process.env.GITHUB_ACTIONS === 'true' ? `::notice::${line}` : line);
 }
 
 // What reached the Worker in this run, for --report.
 const report = { upserted: [], kept: [], skipped_retired: [], pushed: [], failed: [], not_attempted: [] };
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2), { flags: ['dry-run', 'rebuild-topics', 'allow-shrink', 'allow-empty'], values: ['api', 'report', 'events-from'], multi: ['event'] });
+  const args = parseArgs(process.argv.slice(2), { flags: ['dry-run', 'rebuild-topics', 'allow-shrink', 'allow-empty', 'refresh-only'], values: ['api', 'report', 'events-from'], multi: ['event'] });
   reportFile = args.report ?? null;
   const api = normalizeApiBase(args.api);
   // Every admin request is signed with v2. A CADDIE_ADMIN_SIG_VERSION left over from the rollback
@@ -260,13 +332,24 @@ async function main() {
     console.log('The ingest run fetched no conference; nothing to push.');
     return 0;
   }
-  const confs = [];
+  let confs = [];
   for (const slug of slugs) {
     const conf = readConference(slug);
     if (!conf) throw new UsageError(`No data/${slug}/conference.json. Run scripts/ingest.mjs --event ${slug} --dry-run first.`);
     confs.push(conf);
   }
   if (!confs.length) throw new UsageError('No conferences to push.');
+  if (args['refresh-only']) {
+    const { push, skipped } = refreshOnly(confs, await listedSearchable(api));
+    for (const slug of skipped.filter((x) => typeof x === 'string' && isSlug(x))) {
+      notice(`${slug}: skipped, the Worker does not list it as searchable (never added, hidden or removed), and --refresh-only never adds or shows a conference; caddie-admin conferences add, unhide or unretire is the operator's step.`);
+    }
+    if (!push.length) {
+      console.log('Nothing to refresh.');
+      return 0;
+    }
+    confs = push;
+  }
 
   // In a dry run the Worker is only asked for the frozen topic list, and only when a token exists;
   // an unreachable Worker then means "build the list from the titles".
@@ -307,8 +390,17 @@ async function main() {
     const live = await liveSearchable(api);
     const kept = confs.filter((c) => c.status !== 'searchable' && c.status_reason === 'fetch_failed' && live.has(c.slug));
     for (const c of kept) console.log(`${c.slug}: the schedule fetch failed; keeping the Worker's searchable document.`);
-    const sent = confs.filter((c) => !kept.includes(c));
-    const plan = planPush({ sent, searchable, skipped: await upsertConferences(admin, sent, { prepared }) });
+    let sent = confs.filter((c) => !kept.includes(c));
+    let skipped;
+    if (args['refresh-only']) {
+      const refreshed = await upsertRefreshing(admin, sent, { prepared });
+      sent = sent.filter((c) => !refreshed.changed.includes(c.slug));
+      searchable = searchable.filter((c) => !refreshed.changed.includes(c.slug));
+      skipped = refreshed.skipped;
+    } else {
+      skipped = await upsertConferences(admin, sent, { prepared });
+    }
+    const plan = planPush({ sent, searchable, skipped });
     report.kept = kept.map((c) => c.slug);
     report.skipped_retired = plan.skipped_retired;
     report.upserted = plan.upserted;
