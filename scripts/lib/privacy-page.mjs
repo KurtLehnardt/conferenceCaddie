@@ -14,6 +14,10 @@
 //   and nudge records until the conference ends ("Notifications" says it sends no push).
 // - MOD_CLASSIFIER other than "off" (scripts/deploy.sh): spot lines, notes and spot-me lines then
 //   go to Google Cloud Natural Language for moderation ("Service providers" does not name it).
+// - The secret caddie-vapid-private (docs/OPERATOR_CHECKLIST.md, step 7), which turns Web Push on
+//   at the next deploy: the server then stores browsers' push subscriptions and, for every pair of
+//   attendees matched in the same zone, a nudge record (both random identifiers and the day) until
+//   the conference ends, app users included ("Notifications" says it sends no push).
 // - Moving the apps' default backend (Defaults.BACKEND) to another tier or host.
 //
 // The sections on the official deployment (OFFICIAL_SERVER_HOST and "Service providers") describe
@@ -51,7 +55,7 @@ export function normaliseRepoUrl(value) {
 export function normaliseEmail(value) {
   const raw = String(value ?? '').trim();
   if (!raw) return null;
-  if (raw.length > 254 || !/^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/.test(raw)) {
+  if (raw.length > 254 || !/^[A-Za-z0-9_+-]+(\.[A-Za-z0-9_+-]+)*@[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$/.test(raw)) {
     throw new Error('The contact email must be a plain email address.');
   }
   return raw;
@@ -104,7 +108,7 @@ export function privacyPage(siteUrl, repoUrl = OFFICIAL_REPO_URL, email = null) 
       <h1>Privacy policy</h1>
       <p class="small">Effective ${EFFECTIVE_DATE}</p>
 
-      <p>Conference Caddie helps you find talks and people to talk to at Linux Foundation conferences. It is open-source software (<a href="${repo}">source code</a>). This policy covers the Conference Caddie apps for Android and iOS and the server they use by default. It explains what the apps send, what that server stores, how long it keeps it and how you can delete it. "We" means the maintainer of the Conference Caddie project (<a href="${repo}">${repoName}</a> on GitHub), who publishes the apps under the developer name shown in Google Play and the App Store and runs that server. The Conference Caddie web app runs on a different server and is not covered by this policy.</p>
+      <p>Conference Caddie helps you find talks and people to talk to at Linux Foundation conferences. It is open-source software (<a href="${repo}">source code</a>). This policy covers the Conference Caddie apps for Android and iOS and the server they use by default. It explains what the apps send, what that server stores, how long it keeps it and how you can delete it. "We" means the maintainer of the Conference Caddie project (<a href="${repo}">${repoName}</a> on GitHub), who publishes the apps under the developer name shown in Google Play and the App Store and runs that server. The Conference Caddie web app at its current address runs on a different server and is not covered by this policy. The older web app at ${server} uses the server described here, and what this policy says about that server applies to profiles made there too.</p>
 
       <nav class="toc" aria-label="Contents">
         <ul>
@@ -134,16 +138,16 @@ export function privacyPage(siteUrl, repoUrl = OFFICIAL_REPO_URL, email = null) 
       <ul>
         <li>There is no account to sign in to. The app never asks for your email address or phone number.</li>
         <li>There are no ads, no analytics, no crash reporting in the app and no tracking. We do not sell your data or share it with anyone for advertising.</li>
-        <li>Talk search and the suggestions in For you run on your phone, and your search words and the topics you want to learn never leave it. To show how many people want to talk about each talk, the app sends the server the ids of the talks you are looking at, your marked talks among them, without anything that identifies you, and the server keeps nothing.</li>
+        <li>Talk search and the suggestions in For you run on your phone, and your search words and the topics and text you give For you never leave it. To show how many people want to talk about each talk, the app sends the server the ids of the talks you are looking at, your marked talks among them, without anything that identifies you, and the server keeps nothing.</li>
         <li>The people features are optional. If you make a profile, the server keeps it only until the end of the conference, and Delete my profile removes it at once.</li>
-        <li>Your position is sent only if you turn it on, only while the app is open, and it is deleted when your presence ends. Other attendees never see your coordinates: they see a rough band, and someone you agree to meet sees how far away you are and in which direction.</li>
+        <li>Your position is sent only if you turn it on, only while the app is open, and it is deleted when your presence ends, or at the server's next cleanup after it runs out. Other attendees never see your coordinates: they see a rough band, and someone you agree to meet sees how far away you are and in which direction.</li>
       </ul>
 
       <h2 id="talks">Using the app without a profile</h2>
       <p>The app downloads the list of conferences and each conference's talk data (titles, abstracts, speakers and times, taken from the conference's public schedule) from the server and from the project's GitHub Pages site. These requests carry nothing that identifies you, although, like every request on the internet, they show your IP address to the service that answers them.</p>
-      <p>Searching talks, the suggestions in For you and your schedule are worked out on your phone. Your search words and the topics you want to learn are not sent to us.</p>
+      <p>Searching talks, the suggestions in For you and your schedule are worked out on your phone. Your search words and the topics and text you give For you are not sent to us; the topics in a profile are separate and are sent with it (see <a href="#profile">Your profile</a>).</p>
       <p>When the server offers the people features, as ours does, the app shows how many people share their profile for each talk. To get those numbers it sends the server the conference and the ids of the talks on the screen you are looking at: a talk you open, the results of a talk search, your For you suggestions or the talks you marked as Interested, up to 100 at a time. This happens whether or not you have a profile. The request carries no identifier, and the server answers with numbers and keeps nothing, although, like every request, it shows your IP address (see <a href="#providers">Service providers</a>).</p>
-      <p>If you import a schedule file (a calendar or spreadsheet export), the app sends the file's contents to the server, which reads them once to find the matching talks and sends back the matches. The server does not store or log the file.</p>
+      <p>If you import a schedule file (a calendar or spreadsheet export), the app sends the file's text, its name and its type to the server, which reads them once to find the matching talks and sends back the matches. The server does not store or log the file.</p>
 
       <h2 id="profile">Your profile</h2>
       <p>To find people to talk to, you can make a profile for a conference. It holds a display name, which is required and can be any name you choose, and, if you want, a few sentences about you, your interests, your expertise, the topics you want to learn or could speak about, a LinkedIn profile address, a note on how to reach you, and the talks for which you share your profile.</p>
@@ -156,19 +160,19 @@ export function privacyPage(siteUrl, repoUrl = OFFICIAL_REPO_URL, email = null) 
       <h2 id="presence">Being around and your position</h2>
       <p>While your profile is visible, you can tell other attendees that you are around: the room or area of the venue you are in and, if you like, a short line on how to spot you. Other attendees who are also around see the room or area; only a person you are meeting sees the line on how to spot you, and only while the meeting lasts. Your presence lasts 60 minutes, or until the end of the conference day if you choose that, and never past the end of the conference. You can end it at any time.</p>
       <p>If you also turn on Use my position, the app sends your device's position with your presence. It does this only if you allowed precise location, only while the app is open, and at most about once every 30 seconds. The app never asks for location access in the background. The server rounds the position to about a metre, discards it if it is less accurate than 200 metres, and stores it, with the centre of the grid square of roughly 100 metres around it, only for as long as your presence lasts. When you end your presence, the position is deleted at once; when your presence runs out, the position is no longer used and is deleted at the server's next cleanup (see <a href="#retention">How long data is kept</a>).</p>
-      <p>Nobody else sees your coordinates. Other attendees who are also around see a rough band: in the same room or area, near (the same square of about 100 metres), around (within about 300 metres) or elsewhere at the venue. Someone who sends false positions of their own could use these bands to work out which square of about 100 metres you are in. If you and another person agree to meet, each of you sees the distance to the other, in steps of 10 metres, and a direction, only while that meeting lasts; together with their own position, that shows the other person roughly where you are.</p>
+      <p>Nobody else sees your coordinates. Other attendees who are also around see a rough band: in the same room or area, near (the same square of about 100 metres), around (within about 300 metres) or elsewhere at the venue. Someone who sends false positions of their own could use these bands to work out which square of about 100 metres you are in. If you and another person agree to meet and you both use your position, each of you sees the distance to the other, in steps of 10 metres, and a direction, only while that meeting lasts; together with their own position, that shows the other person roughly where you are.</p>
 
       <h2 id="meets">Asking to talk shop</h2>
-      <p>You can ask another attendee who is around to talk shop. A request can carry a short note, a meeting point and a line on how to spot you, and only the two of you can see it. A request lasts 15 minutes and an accepted meeting 20 minutes. When either of you ends a request or a meeting, its note, meeting point and spot lines are erased at once, and the rest of the record (the two random identifiers, its state and its times) is deleted at the server's first cleanup after the time it would have run out. A request or meeting that runs out on its own is deleted, text included, at the next cleanup. A declined request keeps its text until it runs out and loses it at the next cleanup; the record without its text is kept for up to two days, so that the Not now pause it sets can be applied.</p>
+      <p>You can ask another attendee who is around to talk shop. A request can carry a short note, a meeting point and a line on how to spot you, and only the two of you can see it. A request lasts 15 minutes and an accepted meeting 20 minutes. When either of you ends a request or a meeting, its note, meeting point and spot lines are erased at once, and the rest of the record (the two random identifiers, the topic you chose, its state and its times) is deleted at the server's first cleanup after the time it would have run out. A request or meeting that runs out on its own is deleted, text included, at the next cleanup. A declined request keeps its text until it runs out and loses it at the next cleanup; the record without its text is kept for up to two days, so that the Not now pause it sets can be applied.</p>
       <p>The app has no chat and keeps no conversations.</p>
 
       <h2 id="safety">Reports and blocks</h2>
-      <p>You can report a profile, a spot line or a request to talk shop, choosing one of a fixed list of reasons; there is no free text. A report stores the random identifiers of the person who reports and of the person reported, what was reported, the reason and the time. Reports from two different people hide what was reported. Reports are kept after either profile is deleted, so that deleting and re-creating a profile does not undo a hide, until we have reviewed them; we delete them after the conference, when we clean up after it.</p>
+      <p>You can report a profile, a spot line or a request to talk shop, choosing one of a fixed list of reasons; there is no free text. A report stores the random identifiers of the person who reports and of the person reported, what was reported, the reason and the time. Reports from two different people hide what was reported. Reports are kept after either profile is deleted, so that deleting and re-creating a profile does not undo a hide, until we clean up after the conference, when we delete them; a report we find unfounded is deleted when we lift the hide it caused.</p>
       <p>When you block someone, the server stores both random identifiers until the end of the conference, and the two of you no longer see each other.</p>
 
       <h2 id="notifications">Notifications</h2>
-      <p>On Android, while you are visible, your presence is on, the conference is under way and you allow notifications, the app checks about every 15 minutes in the background whether someone you might want to meet is around. The check uses your profile's random identifier and stores nothing on the server. The notification is made on your phone and names nobody.</p>
-      <p>Our server does not send push notifications through Apple, Google or web browsers. If a server offers them, the iOS app registers for them only after you make your profile visible, and that server keeps the push token, which then also identifies your phone, until the end of the conference.</p>
+      <p>On Android, while you are visible, your presence is on, nudges are on (the default), the conference is under way and you allow notifications, the app checks about every 15 minutes in the background whether someone you might want to meet is around. The check uses your profile's random identifier and stores nothing on the server. The notification is made on your phone and names nobody.</p>
+      <p>Our server does not send push notifications through Apple, Google or web browsers. If a server offers them, the iOS app registers for them only when you turn on push nudges for a conference where your profile is visible or shared for a talk, and that server keeps the push token, which then also identifies your phone, until the end of the conference.</p>
 
       <h2 id="bluetooth">Bluetooth</h2>
       <p>The published apps do not use Bluetooth. Finding people nearby by Bluetooth is still being tested and is switched off in the published apps; the Android app does not even request a Bluetooth permission.</p>
@@ -180,14 +184,14 @@ export function privacyPage(siteUrl, repoUrl = OFFICIAL_REPO_URL, email = null) 
         <li><strong>Your presence and position:</strong> until your presence runs out, after 60 minutes or at the end of the conference day. If you end your presence yourself, they are deleted at once.</li>
         <li><strong>Requests to talk shop:</strong> minutes, as described above; a declined request up to two days, without its text.</li>
         <li><strong>Blocks:</strong> until the end of the conference.</li>
-        <li><strong>Reports:</strong> until we have reviewed them, and no longer than our cleanup after the conference.</li>
+        <li><strong>Reports:</strong> until our cleanup after the conference, or until we lift the hide they caused.</li>
         <li><strong>Request logs:</strong> 30 days, as described under <a href="#providers">Service providers</a>.</li>
       </ul>
       <p>Our hosting providers keep backups of their own, such as the automatic snapshots of our database service, so deleted data can remain in a backup for a limited time under their retention rules. A copy that we make by hand, for example during maintenance, is not covered by the automatic deletion and is deleted by hand.</p>
 
       <h2 id="delete">Deleting your data</h2>
       <p>In the app, open People, then your profile, and tap Delete my profile. This deletes your profile from your phone and from the server the app is connected to, for every conference on that server, together with your presence, your requests to talk shop, your push registrations and the people you blocked. It takes effect at once. If your phone is offline, the app tries again until the server confirms the deletion.</p>
-      <p>What remains: reports you made or that were made about you, until we have reviewed them; blocks that other people made of you, until the end of the conference; and, on your phone, the people you met and the talks you marked. Uninstalling the app, or clearing its storage, removes everything the app keeps on your phone. People you met keep, on their own phones, the display name and the About text of your profile that they saw, until they remove them or uninstall the app; we cannot delete those copies.</p>
+      <p>What remains: reports you made or that were made about you, until our cleanup after the conference; blocks that other people made of you, until the end of the conference; and, on your phone, the people you met and the talks you marked. Uninstalling the app, or clearing its storage, removes everything the app keeps on your phone. People you met keep, on their own phones, the display name and the About text of your profile that they saw, until they remove them or uninstall the app; we cannot delete those copies.</p>
       <p>If you no longer have the app, your profile is still deleted automatically after the conference ends. To have it deleted sooner, or for any other request about your data, <a href="#contact">contact us</a> with the conference and the display name you used.</p>
 
       <h2 id="phone">What stays on your phone</h2>
@@ -195,7 +199,7 @@ export function privacyPage(siteUrl, repoUrl = OFFICIAL_REPO_URL, email = null) 
 
       <h2 id="never">What we never collect</h2>
       <ul>
-        <li>Your email address or phone number, your contacts or photos. The app never reads your phone's calendars; a schedule you import is a file you choose.</li>
+        <li>Your email address or phone number (unless you type one into How to reach me yourself), your contacts or photos. The app never reads your phone's calendars; a schedule you import is a file you choose.</li>
         <li>Your position in the background, or at any time unless you turn it on.</li>
         <li>Advertising identifiers or the hardware identifiers of your phone. The app's own identifier is the random one it makes for each server (and, on a server that offers push notifications, the push token).</li>
         <li>Usage analytics, crash reports or diagnostics: the apps contain no analytics or crash-reporting code, and the library that runs the search model on your phone (ONNX Runtime) has its telemetry switched off. If you allow it in your phone's settings, Google Play and Apple share crash reports (device model, system version and where the app failed) and app statistics with us, and TestFlight testers can send us feedback with a crash log.</li>
@@ -216,7 +220,7 @@ export function privacyPage(siteUrl, repoUrl = OFFICIAL_REPO_URL, email = null) 
       <p>Conference Caddie is made for people attending professional conferences. It is not directed at children, and we do not knowingly collect data from children.</p>
 
       <h2 id="rights">Your choices and rights</h2>
-      <p>Everything in your profile except the display name is optional, and you can change or delete your profile in the app at any time. We process your profile, presence and position because you choose to use the people features and can stop at any time; we process request logs and the request counts per IP address because we have a legitimate interest in running the service securely and preventing abuse.</p>
+      <p>Everything in your profile except the display name is optional, and you can change or delete your profile in the app at any time. We process your profile, presence and position because you choose to use the people features and can stop at any time; we process request logs and the request counts per IP address because we have a legitimate interest in running the service securely and preventing abuse; and we keep reports and blocks, also after a profile is deleted, because we have a legitimate interest in keeping attendees safe.</p>
       <p>You can ask us what we hold about you, ask us to correct or delete it, or object to how we use it. Because the server knows you only by a random identifier, tell us the conference and the display name you used so that we can find your profile, and we may ask you to show that the profile is yours, for example by changing its About text to a code we give you, before we share or delete anything. If you are in the European Union, the United Kingdom or another place with similar law, you can also complain to your data protection authority.</p>
 
       <h2 id="changes">Changes to this policy</h2>

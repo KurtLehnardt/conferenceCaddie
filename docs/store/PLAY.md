@@ -9,7 +9,7 @@ Addresses used below:
 | Privacy policy | `https://kurtlehnardt.github.io/conferenceCaddie/privacy.html` |
 | Account and data deletion | `https://kurtlehnardt.github.io/conferenceCaddie/privacy.html#delete` |
 | Website | `https://kurtlehnardt.github.io/conferenceCaddie/` |
-| Support email | `<your support email>`: Play requires one and shows it publicly. Use an address you are willing to publish, and set it as the repository variable `CADDIE_PRIVACY_EMAIL` too, so that the privacy page names it as a contact (the Pages workflow reads it; without it the page names only the repository's public issues). |
+| Support email | `<your support email>`: Play requires one and shows it publicly. Use an address you are willing to publish, and set it as the repository variable `CADDIE_PRIVACY_EMAIL` too, so that the privacy page names it as a contact (the Pages workflow reads it; without it the page names only the repository's public issues). A new value takes effect at the next Pages deploy: run the workflow "Deploy the talk bundles to GitHub Pages" by hand after setting it. |
 | Developer name | The privacy policy says "we" is the maintainer of KurtLehnardt/conferenceCaddie, publishing under the developer name shown in Play. Nothing to change unless the developer account belongs to someone else. |
 | The bundle to upload | The artifact `conference-caddie-native-<commit>-release.aab` of a `Native apps` run on `main` (see [Internal testing](#internal-testing)) |
 
@@ -141,7 +141,7 @@ App content, Target audience:
 
 App content, Data safety. These answers describe the release build on its default server, the tier 3 server named in the privacy policy (`Defaults.BACKEND`). Under Play's definitions:
 
-- **Collected** means sent off the phone; data processed only on the phone is not collected. Talk search, For you and the learn topics and text run on the phone and never leave it. The ids of the talks on screen (an opened talk, talk search results, For you suggestions, the marked talks) go to the server for the circle counts without an identifier, and the marked talks go with every people search, with the profile identifier; both are ephemeral.
+- **Collected** means sent off the phone; data processed only on the phone is not collected. Talk search, For you and the topics and text given to For you run on the phone and never leave it; the profile's own learn and speak topics are separate and are sent with the profile. The ids of the talks on screen (an opened talk, talk search results, For you suggestions, the marked talks) go to the server for the circle counts without an identifier, and the marked talks go with every people search, with the profile identifier; both are ephemeral.
 - **Shared** means given to a third party. Neither our service providers (Google Cloud, Elastic Cloud, GitHub) nor other attendees seeing what a person chose to make visible count as sharing, so nothing is shared.
 - **Ephemeral** means held only in memory to answer the request. A schedule file, a people search and a talk's circle count are ephemeral; profiles, presence and positions are stored, if only for minutes to days.
 

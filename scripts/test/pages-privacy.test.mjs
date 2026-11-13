@@ -39,7 +39,7 @@ test('a contact email is named only when given, and must be a plain address', ()
   assert.match(html, /issues/);
   assert.equal(normaliseEmail(''), null);
   assert.equal(normaliseEmail(' a.b+c@example.org '), 'a.b+c@example.org');
-  for (const bad of ['no-at-sign', 'a@b', 'a b@example.org', 'a@example.org?subject=x', '"><script>@x.org']) {
+  for (const bad of ['no-at-sign', 'a@b', 'a b@example.org', 'a@example.org?subject=x', '"><script>@x.org', 'a%0Abcc@x.org', '.a..b@x.org', 'a@-x-.org']) {
     assert.throws(() => normaliseEmail(bad), /plain email address/, bad);
   }
 });

@@ -53,7 +53,7 @@ Talks: pick a conference from the list and wait a few seconds while its schedule
 
 People features (optional) are offered only for a conference that has not ended yet, so pick a current or upcoming conference. Open People, tap "Create my profile", enter any display name, save, and tap "Make me visible". The profile is visible only to other attendees who are visible at the same conference, it is deleted automatically when the conference ends, and People, Profile, "Delete my profile" deletes it at once.
 
-Location: used only while the app is in use, only after the person turns on "Use my position", to show other attendees a rough distance band. It is never shown as a position.
+Location: used only while the app is in use, only after the person turns on "Use my position". Other attendees see a rough band (same area, near, around, elsewhere at the venue), never a position; inside a meeting both people agreed to, each sees the distance in 10 m steps and the direction to the other.
 
 Notifications: the app may ask for permission to show notifications about people to meet. The default server does not send push notifications.
 
@@ -79,4 +79,5 @@ Use the same six screens as for Google Play ([PLAY.md](PLAY.md), "Store listing"
 ## Before submitting
 
 - The Release `Info.plist` still contains `NSBluetoothAlwaysUsageDescription` although Bluetooth is off in Release builds. App Review may ask about it; the review note above answers it, and removing the key from Release builds (as the background modes already are) avoids the question.
+- The location purpose string (`NSLocationWhenInUseUsageDescription` in `native/iosApp/iosApp/Info.plist`) says "Nobody else ever sees your position, and it's never stored after." The server stores the position while presence lasts, and a meeting partner sees a distance and a direction (the privacy policy says both), so App Review (guideline 5.1.1(ii)) could find it misleading. Reword it before submitting, for example: "Your position is used only while you're around and chose "Use my position too": it ranks people near you higher and, once you've both agreed to meet, shows each of you how far apart you are and in which direction. Your coordinates are never shown to anyone, and they're deleted when you stop being around."
 - Check the privacy policy URL answers 200, and that it still matches the build (`scripts/lib/privacy-page.mjs`). The app links to it from Settings, About, "Privacy policy", as guideline 5.1.1(i) asks.
