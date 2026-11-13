@@ -3,7 +3,11 @@
 // zone, spot or position change never makes someone visible for longer than they chose. It needs
 // live presence and never starts it; it is refused with 400 presence_not_active otherwise, and it
 // is judged against the profile read that guards the write, so a presence that ended between the
-// read and the write is never brought back. 'hour' and 'day' are unchanged.
+// read and the write is never brought back. 'hour' and 'day' are unchanged, except that 'day' in
+// the last second of a conference day (after 23:59:59.000 in the conference's time zone, when that
+// day's end has already passed) runs to the end of the next day instead of answering 400
+// "conference has ended". The 'day' tests run on a pinned clock, so they do not depend on the
+// time of day the suite runs at.
 //
 // Run with `npm test`. The server modules talk to the in-memory stand-in of
 // test/helpers/fake-es.mjs through a stubbed fetch; nothing reaches the network. The master keyring
@@ -23,8 +27,9 @@ import { effectiveCapabilities, LEGACY } from '../contracts/js/capabilities.mjs'
 process.env.BLE_MASTER_KEYRING = JSON.stringify({ current: 'k1', keys: { k1: crypto.randomBytes(32).toString('base64url') } });
 
 const { handleConnectApi } = await import('../server/connect.mjs');
-const { dayBounds, PRESENCE_OFF } = await import('../server/people.mjs');
+const { dayBounds, dayEndAfter, PRESENCE_OFF } = await import('../server/people.mjs');
 const { currentCapabilities } = await import('../server/capabilities.mjs');
+const worker = await import('../worker/src/lib/time.js');
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixture = (f) => JSON.parse(readFileSync(path.join(ROOT, 'contracts/fixtures/capabilities', f), 'utf8'));
@@ -37,11 +42,23 @@ const NOT_ACTIVE = { error: 'presence_not_active', message: "until: 'keep' needs
 
 const put = (device, body) => quietly(() => request(handleConnectApi, 'PUT', '/api/presence', device, { event: EVENT, zone: 'Hallway', ...body }));
 
-// A person who is around until `untilMs` (20 minutes from now by default), with a live Bluetooth
-// session, plus any other stored fields.
-function setup(fields = {}, untilMs = Date.now() + 20 * MIN) {
+// Two more conferences in every cluster of this file, beside the stand-in's own EVENT (in UTC):
+// one in Los Angeles (UTC-8 in November) and one without a time zone, whose days end at UTC-12.
+// Every cluster holds the same three, so the server's conference cache answers the same whichever
+// cluster filled it.
+const LA_EVENT = 'testconf-la-2099';
+const NO_ZONE_EVENT = 'testconf-nozone-2099';
+const MORE_CONFERENCES = [
+  { slug: LA_EVENT, status: 'searchable', end_date: '2099-12-31', time_zone: 'America/Los_Angeles' },
+  { slug: NO_ZONE_EVENT, status: 'searchable', end_date: '2099-12-31' },
+];
+
+// A person at `event` (EVENT by default) who is around until `untilMs` (20 minutes from now by
+// default), with a live Bluetooth session, plus any other stored fields.
+function setup(fields = {}, untilMs = Date.now() + 20 * MIN, event = EVENT) {
   const device = newDevice();
   const cluster = useCluster(new FakeES());
+  for (const conf of MORE_CONFERENCES) cluster.put(INDEX.conferences, conf.slug, conf);
   const since = iso(Date.now() - 40 * MIN);
   addPerson(cluster, device, {
     presence_since: since,
@@ -50,9 +67,31 @@ function setup(fields = {}, untilMs = Date.now() + 20 * MIN) {
     ble_master_id: 'k1',
     ...fields,
   });
-  const id = personId(device.profileId);
+  let id = personId(device.profileId);
+  if (event !== EVENT) {
+    // addPerson stores the person at EVENT; the same document, moved to the other conference.
+    const source = { ...cluster.source(INDEX.people, id), event_id: event };
+    cluster.docs(INDEX.people).delete(id);
+    id = `${event}:${device.profileId}`;
+    cluster.put(INDEX.people, id, source);
+  }
   // A copy: the stand-in updates its stored source in place.
   return { device, cluster, id, since, doc: () => structuredClone(cluster.source(INDEX.people, id)) };
+}
+
+// Runs fn with Date.now pinned at `atMs`, and puts the real clock back after. The presence route
+// reads no other clock, and the stand-in reads Date.now for "now" too. The pinned instants are in
+// 2099, before the test conferences end; the server's caches stamped then look fresh to the real
+// clock afterwards, which is harmless here, because every cluster holds the same conferences and
+// zones.
+async function atClock(atMs, fn) {
+  const realNow = Date.now;
+  Date.now = () => atMs;
+  try {
+    return await fn();
+  } finally {
+    Date.now = realNow;
+  }
 }
 
 describe("until: 'keep'", () => {
@@ -264,23 +303,159 @@ describe("'hour' and 'day' are unchanged", () => {
   });
 
   test("'day' runs to the end of the conference day", async () => {
-    const { device, doc } = setup();
-    const { result } = await put(device, { until: 'day' });
-    assert.equal(result.status, 200, JSON.stringify(result.body));
-    assert.equal(result.body.until, 'day');
-    assert.equal(result.body.presence_until, iso(dayBounds(Date.now(), 'UTC').end));
-    assert.equal(doc().presence_until, result.body.presence_until);
+    const now = Date.parse('2099-11-12T10:00:00.000Z');
+    await atClock(now, async () => {
+      const { device, doc, since } = setup();
+      const { result } = await put(device, { until: 'day' });
+      assert.equal(result.status, 200, JSON.stringify(result.body));
+      assert.equal(result.body.until, 'day');
+      assert.equal(result.body.presence_until, '2099-11-12T23:59:59.000Z');
+      assert.equal(result.body.presence_until, iso(dayBounds(now, 'UTC').end));
+      assert.equal(result.body.presence_since, since);
+      assert.equal(doc().presence_until, result.body.presence_until);
+    });
   });
 
   test("'hour' and 'day' still turn presence on when none is live", async () => {
-    for (const until of ['hour', 'day']) {
-      const { device, doc } = setup(PRESENCE_OFF);
-      const t0 = Date.now();
-      const { result } = await put(device, { until });
-      assert.equal(result.status, 200, JSON.stringify(result.body));
-      assert.ok(Date.parse(result.body.presence_since) >= t0, `${until}: a new presence session`);
-      assert.ok(Date.parse(doc().presence_until) > Date.now());
+    const now = Date.parse('2099-11-12T10:00:00.000Z');
+    for (const [until, end] of [['hour', '2099-11-12T11:00:00.000Z'], ['day', '2099-11-12T23:59:59.000Z']]) {
+      await atClock(now, async () => {
+        const { device, doc } = setup(PRESENCE_OFF);
+        const { result } = await put(device, { until });
+        assert.equal(result.status, 200, JSON.stringify(result.body));
+        assert.equal(result.body.presence_since, iso(now), `${until}: a new presence session`);
+        assert.equal(result.body.presence_until, end);
+        assert.equal(doc().presence_until, end);
+      });
     }
+  });
+});
+
+describe("'day' at the end of a conference day", () => {
+  // [conference, the clock, the end 'day' stores]. Each conference day ends at 23:59:59.000 in its
+  // own time zone; from then until midnight its end has passed, and 'day' runs to the end of the
+  // next day. Midnight in UTC is mid-afternoon in Los Angeles and noon at UTC-12, so it changes
+  // nothing there.
+  const CASES = [
+    [EVENT, '2099-11-12T10:00:00.000Z', '2099-11-12T23:59:59.000Z'],
+    [EVENT, '2099-11-12T23:59:58.999Z', '2099-11-12T23:59:59.000Z'],
+    [EVENT, '2099-11-12T23:59:59.000Z', '2099-11-13T23:59:59.000Z'],
+    [EVENT, '2099-11-12T23:59:59.500Z', '2099-11-13T23:59:59.000Z'],
+    [EVENT, '2099-11-12T23:59:59.999Z', '2099-11-13T23:59:59.000Z'],
+    [EVENT, '2099-11-13T00:00:00.000Z', '2099-11-13T23:59:59.000Z'],
+    [EVENT, '2099-11-30T23:59:59.500Z', '2099-12-01T23:59:59.000Z'],
+    [LA_EVENT, '2099-11-12T23:59:59.500Z', '2099-11-13T07:59:59.000Z'],
+    [LA_EVENT, '2099-11-13T07:59:58.999Z', '2099-11-13T07:59:59.000Z'],
+    [LA_EVENT, '2099-11-13T07:59:59.000Z', '2099-11-14T07:59:59.000Z'],
+    [LA_EVENT, '2099-11-13T07:59:59.999Z', '2099-11-14T07:59:59.000Z'],
+    [LA_EVENT, '2099-11-13T08:00:00.000Z', '2099-11-14T07:59:59.000Z'],
+    [NO_ZONE_EVENT, '2099-11-12T23:59:59.500Z', '2099-11-13T11:59:59.000Z'],
+    [NO_ZONE_EVENT, '2099-11-13T11:59:59.500Z', '2099-11-14T11:59:59.000Z'],
+    [NO_ZONE_EVENT, '2099-11-13T12:00:00.000Z', '2099-11-14T11:59:59.000Z'],
+  ];
+
+  for (const [event, clock, end] of CASES) {
+    test(`at ${clock}, 'day' at ${event} runs to ${end}, whether presence is on or off`, async () => {
+      const now = Date.parse(clock);
+      await atClock(now, async () => {
+        // Presence that is on, re-keyed in the same write: since is kept, and the new Bluetooth
+        // session ends with the presence at the latest.
+        const on = setup({}, now + 20 * MIN, event);
+        const { result } = await put(on.device, { event, until: 'day', ble: true });
+        assert.equal(result.status, 200, JSON.stringify(result.body));
+        assert.equal(result.body.until, 'day');
+        assert.equal(result.body.presence_until, end);
+        assert.equal(result.body.presence_since, on.since);
+        assert.match(result.body.ble_key, /^[A-Za-z0-9_-]{43}$/);
+        const p = on.doc();
+        assert.equal(p.presence_until, end);
+        assert.ok(Date.parse(p.ble_token_until) <= Date.parse(end), 'the token never outlives the presence');
+
+        // No presence: 'day' turns it on, from now.
+        const off = setup(PRESENCE_OFF, undefined, event);
+        const started = await put(off.device, { event, until: 'day' });
+        assert.equal(started.result.status, 200, JSON.stringify(started.result.body));
+        assert.equal(started.result.body.presence_until, end);
+        assert.equal(started.result.body.presence_since, iso(now));
+        assert.equal(off.doc().presence_until, end);
+      });
+    });
+  }
+
+  test("on the last day of the conference 'day' stops at its end, and after it is 400 conference has ended", async () => {
+    // EVENT is visible until 2099-12-31T23:59:59Z, LA_EVENT until 23:59:59 that day in Los Angeles.
+    // A profile is stored only until its conference ends, so after the end a real one answers 403
+    // profile_required; these profiles outlast it, so the write reaches the end check.
+    const outlasting = { visible_until: '2100-01-02T00:00:00.000Z' };
+    for (const [event, lastMs, visibleUntil] of [
+      [EVENT, Date.parse('2099-12-31T23:59:58.999Z'), '2099-12-31T23:59:59.000Z'],
+      [LA_EVENT, Date.parse('2100-01-01T07:59:58.999Z'), '2100-01-01T07:59:59.000Z'],
+    ]) {
+      await atClock(lastMs, async () => {
+        const { device, doc } = setup({ ...PRESENCE_OFF, ...outlasting }, undefined, event);
+        const { result } = await put(device, { event, until: 'day' });
+        assert.equal(result.status, 200, JSON.stringify(result.body));
+        assert.equal(result.body.presence_until, visibleUntil, `${event}: never past the end of the conference`);
+        assert.equal(doc().presence_until, visibleUntil);
+      });
+      // From the end of the conference, which is the last second of its last day, 'day' does not
+      // run on to the next day.
+      for (const after of [1, 500, 1000, 60_000]) {
+        await atClock(lastMs + after, async () => {
+          const { device, cluster, doc } = setup(outlasting, lastMs + after + 20 * MIN, event);
+          const before = doc();
+          const { result } = await put(device, { event, until: 'day' });
+          assert.equal(result.status, 400, `${event} +${after} ms`);
+          assert.deepEqual(result.body, { error: 'conference has ended' });
+          assert.deepEqual(cluster.tags(), ['get'], 'read, refused, nothing written');
+          assert.deepEqual(doc(), before);
+        });
+      }
+    }
+  });
+
+  test('dayEndAfter is the same rule on the server and on the Worker, around midnight in each zone', () => {
+    // Literal ends across the Los Angeles daylight saving changes of 2099: the last second of
+    // 31 October (PDT) runs to the end of 1 November, a 25-hour day that ends in PST, and the last
+    // second of 7 March (PST) to the end of 8 March, a 23-hour day that ends in PDT.
+    const LA = 'America/Los_Angeles';
+    for (const [clock, end] of [
+      ['2099-11-01T06:59:59.500Z', '2099-11-02T07:59:59.000Z'],
+      ['2099-11-01T07:00:00.000Z', '2099-11-02T07:59:59.000Z'],
+      ['2099-03-08T07:59:59.500Z', '2099-03-09T06:59:59.000Z'],
+      ['2099-03-08T08:00:00.000Z', '2099-03-09T06:59:59.000Z'],
+    ]) {
+      assert.equal(iso(dayEndAfter(Date.parse(clock), LA)), end, clock);
+      assert.equal(iso(worker.dayEndAfter(Date.parse(clock), LA)), end, `${clock} (Worker)`);
+    }
+
+    // Around each zone's midnight, on an ordinary day, at a month's end and on both daylight saving
+    // days: every 5 s from two minutes before to two minutes after, and every 50 ms from two seconds
+    // before to one second after. The end is after the clock, it is today's end while that is
+    // still ahead, and otherwise (the last second) tomorrow's.
+    const offsets = new Set();
+    for (let k = -2 * MIN; k <= 2 * MIN; k += 5000) offsets.add(k);
+    for (let k = -2000; k <= 1000; k += 50) offsets.add(k);
+    let checked = 0;
+    for (const [zone, midnights] of [
+      ['UTC', ['2099-11-13T00:00:00Z', '2099-12-01T00:00:00Z', '2099-03-08T00:00:00Z']],
+      [LA, ['2099-11-13T08:00:00Z', '2099-12-01T08:00:00Z', '2099-11-01T07:00:00Z', '2099-11-02T08:00:00Z', '2099-03-08T08:00:00Z', '2099-03-09T07:00:00Z']],
+      [null, ['2099-11-13T12:00:00Z', '2099-12-01T12:00:00Z']],
+    ]) {
+      for (const midnight of midnights) {
+        for (const k of offsets) {
+          const t = Date.parse(midnight) + k;
+          const end = dayEndAfter(t, zone);
+          assert.equal(worker.dayEndAfter(t, zone), end, `${zone} ${iso(t)}: the Worker agrees`);
+          assert.ok(end > t, `${zone} ${iso(t)}: ${iso(end)} is after the clock`);
+          const today = dayBounds(t, zone).end;
+          assert.equal(worker.dayBounds(t, zone).end, today);
+          assert.equal(end, today > t ? today : dayBounds(t + 1000, zone).end, `${zone} ${iso(t)}`);
+          checked++;
+        }
+      }
+    }
+    assert.equal(checked, 11 * 109, '11 midnights, 109 instants each');
   });
 });
 

@@ -59,7 +59,7 @@ import { peoplePreference, withPreference } from './preference.mjs';
 import {
   people, idx, docId, BLOCKS_INDEX, MEETS_INDEX, LIMITS, REF_RE,
   HttpError, UpstreamError, bad, forbidden, sendJson, limit, jsonBody, requireDevice, text,
-  conferenceFor, dayBounds, topicLabels, zonesFor, authenticated, updateOwnProfile, bulkOne, isAround, PRESENCE_OFF,
+  conferenceFor, dayBounds, dayEndAfter, topicLabels, zonesFor, authenticated, updateOwnProfile, bulkOne, isAround, PRESENCE_OFF,
   peopleByIds, docByRef, personByRef, blockedIds, blockedBetween, blockId, dispatch, deleteWhere,
   locationOf, cellFor, distanceM, bearingDeg, reembedPending,
 } from './people.mjs';
@@ -508,8 +508,10 @@ async function putPresence(req, res) {
     if (!(await zonesFor(conf.slug)).has(zone)) throw bad("zone must be one of the conference's zones");
     const now = Date.now();
     // 'hour' runs out in 60 minutes; 'day' at the end of the conference day (its time zone), when
-    // the client's zone confirmation does the safeguarding instead. 'keep' writes back the end this
-    // read found and is refused when there is none or it has passed, so it never starts presence.
+    // the client's zone confirmation does the safeguarding instead; in the last second of a day,
+    // once 23:59:59 has passed, at the end of the next day (dayEndAfter). 'keep' writes back the
+    // end this read found and is refused when there is none or it has passed, so it never starts
+    // presence.
     // The write is guarded by this read's sequence number: when a delete, the purge or another
     // write changed the document in between, it is read and judged again, so 'keep' cannot bring
     // back an end that is gone. Decided on this read: a 'keep' at the very edge may write back an
@@ -517,7 +519,7 @@ async function putPresence(req, res) {
     const storedUntilMs = untilOf(me);
     const live = liveAt(me, now);
     if (mode === 'keep' && !live) throw presenceNotActive();
-    const span = mode === 'keep' ? storedUntilMs : mode === 'day' ? dayBounds(now, conf.timeZone).end : now + PRESENCE_MS;
+    const span = mode === 'keep' ? storedUntilMs : mode === 'day' ? dayEndAfter(now, conf.timeZone) : now + PRESENCE_MS;
     const untilMs = Math.min(span, Date.parse(conf.visibleUntil));
     if (untilMs <= now) throw bad('conference has ended');
     // Turning it on again while it is on extends it ('hour', 'day'); since keeps the first time.

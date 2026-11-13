@@ -72,11 +72,28 @@ export function visibleUntil(endDate, timeZone, graceDays = 0) {
 // demonstration set up the day before. For the demo they last this many days longer.
 export const DEMO_GRACE_DAYS = 7;
 
-// The start (00:00:00) and end (23:59:59) of the current conference day, in milliseconds. Meet
-// requests wait until the end of the day, and "Not now" replies are counted per day.
-export function dayBounds(nowMs, timeZone) {
+// [year, month, day] of an instant in the conference's time zone (UTC-12 without one).
+function localDate(nowMs, timeZone) {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone: timeZone || 'Etc/GMT+12', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(nowMs));
   const get = (type) => Number(parts.find((p) => p.type === type)?.value);
-  const [y, m, d] = [get('year'), get('month'), get('day')];
+  return [get('year'), get('month'), get('day')];
+}
+
+// The start (00:00:00) and end (23:59:59) of the current conference day, in milliseconds. Meet
+// requests wait until the end of the day, and "Not now" replies are counted per day. The end is
+// 23:59:59.000, so in the last second of a day it is already behind nowMs (see dayEndAfter).
+export function dayBounds(nowMs, timeZone) {
+  const [y, m, d] = localDate(nowMs, timeZone);
   return { start: wallToInstant(Date.UTC(y, m - 1, d, 0, 0, 0), timeZone), end: wallToInstant(Date.UTC(y, m - 1, d, 23, 59, 59), timeZone) };
+}
+
+// The end (23:59:59) of the conference day for a presence with until: 'day', in milliseconds:
+// today's, or tomorrow's once today's has passed. Today's end is 23:59:59.000, so from then until
+// midnight (the last second of the day) it is not after nowMs, and a presence that ended there
+// would be over before it was written; it runs to the end of the next day instead, as it does
+// from 00:00:00 on. The result is always after nowMs. Date.UTC carries day + 1 over a month end.
+export function dayEndAfter(nowMs, timeZone) {
+  const [y, m, d] = localDate(nowMs, timeZone);
+  const today = wallToInstant(Date.UTC(y, m - 1, d, 23, 59, 59), timeZone);
+  return today > nowMs ? today : wallToInstant(Date.UTC(y, m - 1, d + 1, 23, 59, 59), timeZone);
 }
