@@ -1,8 +1,9 @@
 // POST /api/meet after three "Not now" replies today (tier 3): 429 paused, whose retry_at and
-// Retry-After point at midnight in the conference's time zone, when the count starts again. That
-// is one second after the day's end (dayBounds, 23:59:59.000), so an ask refused in the last
-// second of a day is not told to retry at a time that has already passed, and an ask made at
-// retry_at goes through. The Worker keeps the same rule (worker/test/meet-pause-day-end.test.mjs).
+// Retry-After point at midnight in the conference's time zone (nextDayStart), when the count starts
+// again: normally one second after the day's end (dayBounds, 23:59:59.000), and an hour after it
+// where daylight saving time ends at midnight west of UTC. An ask refused in the last second of a
+// day is not told to retry at a time that has already passed, and an ask made at retry_at goes
+// through. The Worker keeps the same rule (worker/test/meet-pause-day-end.test.mjs).
 //
 // Run with `npm test`. The server modules talk to the in-memory stand-in of
 // test/helpers/fake-es.mjs through a stubbed fetch; nothing reaches the network. Every test runs on
@@ -21,10 +22,16 @@ before(() => bootPurgeDone());
 const MIN = 60_000;
 const iso = (ms) => new Date(ms).toISOString();
 const PAUSED = 'Three people said not now today. You can ask again tomorrow.';
-// Beside the stand-in's own EVENT (in UTC), a conference in Los Angeles (UTC-8 in November). Every
-// cluster holds both, so the server's conference cache answers the same whichever one filled it.
+// Beside the stand-in's own EVENT (in UTC), a conference in Los Angeles (UTC-8 in November) and one
+// in Santiago, where daylight saving time ends at midnight: on 4 April 2099 the hour from 23:00
+// comes twice (UTC-3, then UTC-4, from 03:00Z), and 5 April starts at 04:00Z. Every cluster holds
+// all three, so the server's conference cache answers the same whichever one filled it.
 const LA_EVENT = 'testconf-la-2099';
-const LA_CONFERENCE = { slug: LA_EVENT, status: 'searchable', end_date: '2099-12-31', time_zone: 'America/Los_Angeles' };
+const SANTIAGO_EVENT = 'testconf-scl-2099';
+const MORE_CONFERENCES = [
+  { slug: LA_EVENT, status: 'searchable', end_date: '2099-12-31', time_zone: 'America/Los_Angeles' },
+  { slug: SANTIAGO_EVENT, status: 'searchable', end_date: '2099-12-31', time_zone: 'America/Santiago' },
+];
 
 // Runs fn with Date.now pinned at `atMs` (the meet route and the stand-in read no other clock),
 // and puts the real clock back after.
@@ -42,7 +49,7 @@ async function atClock(atMs, fn) {
 // `declinedAt`, each by someone else.
 function setup(event, declinedAt) {
   const cluster = useCluster(new FakeES());
-  cluster.put(INDEX.conferences, LA_EVENT, LA_CONFERENCE);
+  for (const conf of MORE_CONFERENCES) cluster.put(INDEX.conferences, conf.slug, conf);
   const [me, them] = [newDevice(), newDevice()];
   for (const device of [me, them]) {
     addPerson(cluster, device);
@@ -88,6 +95,9 @@ const CASES = [
   [EVENT, '2099-11-12T23:59:59.999Z', '2099-11-13T00:00:00.000Z', '1'],
   [LA_EVENT, '2099-11-13T00:00:00.000Z', '2099-11-13T08:00:00.000Z', '28800'],
   [LA_EVENT, '2099-11-13T07:59:59.500Z', '2099-11-13T08:00:00.000Z', '1'],
+  [SANTIAGO_EVENT, '2099-04-05T02:30:00.000Z', '2099-04-05T04:00:00.000Z', '5400'],
+  [SANTIAGO_EVENT, '2099-04-05T03:30:00.000Z', '2099-04-05T04:00:00.000Z', '1800'],
+  [SANTIAGO_EVENT, '2099-09-06T03:30:00.000Z', '2099-09-06T04:00:00.000Z', '1800'],
 ];
 
 for (const [event, clock, retryAt, retryAfter] of CASES) {
@@ -108,6 +118,7 @@ test('an ask made at retry_at goes through, and one a millisecond before it is s
   for (const [event, declinedAt, retryAt] of [
     [EVENT, Date.parse('2099-11-12T23:59:59.500Z'), Date.parse('2099-11-13T00:00:00.000Z')],
     [LA_EVENT, Date.parse('2099-11-13T07:59:59.500Z'), Date.parse('2099-11-13T08:00:00.000Z')],
+    [SANTIAGO_EVENT, Date.parse('2099-04-05T03:30:00.000Z'), Date.parse('2099-04-05T04:00:00.000Z')],
   ]) {
     await atClock(retryAt - 1, async () => {
       const { me, ref } = setup(event, declinedAt);

@@ -154,7 +154,8 @@ async function putPresence(ctx, req) {
   // A spot line hidden after reports stays off until the operator unhides it.
   const storedSpot = me.spot_hidden ? null : spot;
   const held = Boolean(storedSpot) && spotPending;
-  // The mode is not stored: a presence whose end is today's end of day was set with 'day'.
+  // The mode is not stored: a presence whose end is the end 'day' gives now (dayUntil) was set
+  // with 'day'.
   const curMode = cur ? (cur.until_ms === dayUntil ? 'day' : 'hour') : null;
   const explicit = body.location === undefined || body.location === null;
   const bleChange = body.ble === true || (body.ble === false && Boolean(cur?.ble_token || cur?.presence_nonce));

@@ -1,8 +1,9 @@
 // POST /api/meet after three "Not now" replies today, on the Worker: 429 paused, whose retry_at and
-// Retry-After point at midnight in the conference's time zone, when the count starts again. That
-// is one second after the day's end (dayBounds, 23:59:59.000), so an ask refused in the last
-// second of a day is not told to retry at a time that has already passed, and an ask made at
-// retry_at goes through. The same rule and cases as tier 3 (test/meet-pause-day-end.test.mjs).
+// Retry-After point at midnight in the conference's time zone (nextDayStart), when the count starts
+// again: normally one second after the day's end (dayBounds, 23:59:59.000), and an hour after it
+// where daylight saving time ends at midnight west of UTC. An ask refused in the last second of a
+// day is not told to retry at a time that has already passed, and an ask made at retry_at goes
+// through. The same rule and cases as tier 3 (test/meet-pause-day-end.test.mjs).
 //
 // ConferenceDO runs in Node on node:sqlite (helpers/harness.mjs), on a pinned clock in 2099.
 // module.registerHooks needs Node 22.15 or later; on older versions these tests are skipped.
@@ -37,7 +38,7 @@ async function call(obj, method, path, body, d) {
 async function setup(timeZone, declinedAt) {
   const state = fakeState();
   const obj = new ConferenceDO(state, ENV);
-  const doc = { slug: SLUG, name: 'Fixture', status: 'searchable', start_date: '2099-11-01', end_date: '2099-12-31', time_zone: timeZone };
+  const doc = { slug: SLUG, name: 'Fixture', status: 'searchable', start_date: '2099-01-01', end_date: '2099-12-31', time_zone: timeZone };
   const put = await obj.fetch(new Request('https://do.internal/internal/conference', {
     method: 'PUT', headers: { 'content-type': 'application/json', 'x-caddie-slug': SLUG }, body: JSON.stringify({ doc, route_prefix: 'Abc123' }),
   }));
@@ -56,6 +57,10 @@ async function setup(timeZone, declinedAt) {
 }
 
 const LA = 'America/Los_Angeles';
+// Daylight saving time ends at midnight in Santiago: on 4 April 2099 the hour from 23:00 comes
+// twice (UTC-3, then UTC-4, from 03:00Z), and 5 April starts at 04:00Z. On 5 September it starts
+// at midnight: 6 September starts at 04:00Z, as 01:00 at UTC-3.
+const SANTIAGO = 'America/Santiago';
 // [time zone, the clock, retry_at, Retry-After in seconds]
 const CASES = [
   ['UTC', '2099-11-12T10:00:00.000Z', '2099-11-13T00:00:00.000Z', '50400'],
@@ -65,6 +70,9 @@ const CASES = [
   ['UTC', '2099-11-12T23:59:59.999Z', '2099-11-13T00:00:00.000Z', '1'],
   [LA, '2099-11-13T00:00:00.000Z', '2099-11-13T08:00:00.000Z', '28800'],
   [LA, '2099-11-13T07:59:59.500Z', '2099-11-13T08:00:00.000Z', '1'],
+  [SANTIAGO, '2099-04-05T02:30:00.000Z', '2099-04-05T04:00:00.000Z', '5400'],
+  [SANTIAGO, '2099-04-05T03:30:00.000Z', '2099-04-05T04:00:00.000Z', '1800'],
+  [SANTIAGO, '2099-09-06T03:30:00.000Z', '2099-09-06T04:00:00.000Z', '1800'],
 ];
 
 for (const [timeZone, clock, retryAt, retryAfter] of CASES) {
@@ -85,6 +93,7 @@ test('an ask made at retry_at goes through, and one a millisecond before it is s
   for (const [timeZone, declinedAt, retryAt] of [
     ['UTC', Date.parse('2099-11-12T23:59:59.500Z'), Date.parse('2099-11-13T00:00:00.000Z')],
     [LA, Date.parse('2099-11-13T07:59:59.500Z'), Date.parse('2099-11-13T08:00:00.000Z')],
+    [SANTIAGO, Date.parse('2099-04-05T03:30:00.000Z'), Date.parse('2099-04-05T04:00:00.000Z')],
   ]) {
     await withFixedClock(retryAt - 1, async () => {
       const s = await setup(timeZone, declinedAt);

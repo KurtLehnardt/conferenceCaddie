@@ -91,11 +91,21 @@ export function dayBounds(nowMs, timeZone) {
 // today's, or tomorrow's once today's has passed. Today's end is 23:59:59.000, so from then until
 // midnight it is not after nowMs, and a presence that ended there would be over before it was
 // written; it runs to the end of the next day instead, as it does from 00:00:00 on. That is the
-// last second of a day, and in a zone where daylight saving time ends at midnight (such as
-// America/Santiago) the whole repeated last hour, because today's end is its first pass. The
-// result is always after nowMs. Date.UTC carries day + 1 over a month end.
+// last second of a day, and where daylight saving time ends at midnight west of UTC (such as
+// America/Santiago) the whole repeated last hour, because today's 23:59:59 reads as its first
+// pass. The result is always after nowMs. Date.UTC carries day + 1 over a month end.
 export function dayEndAfter(nowMs, timeZone) {
   const [y, m, d] = localDate(nowMs, timeZone);
   const today = wallToInstant(Date.UTC(y, m - 1, d, 23, 59, 59), timeZone);
   return today > nowMs ? today : wallToInstant(Date.UTC(y, m - 1, d + 1, 23, 59, 59), timeZone);
+}
+
+// The first instant of the next conference day (midnight at the end of the current one), when the
+// "Not now" count starts again, in milliseconds. Normally one second after dayBounds' end. Where
+// daylight saving time ends at midnight west of UTC (America/Santiago), that end is the first pass
+// of a repeated last hour, and where it starts at midnight the next day's 00:00 does not exist and
+// reads an hour early; the later of the two readings is midnight in either case.
+export function nextDayStart(nowMs, timeZone) {
+  const [y, m, d] = localDate(nowMs, timeZone);
+  return Math.max(wallToInstant(Date.UTC(y, m - 1, d, 23, 59, 59), timeZone) + 1000, wallToInstant(Date.UTC(y, m - 1, d + 1, 0, 0, 0), timeZone));
 }

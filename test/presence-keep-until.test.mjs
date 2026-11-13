@@ -27,7 +27,7 @@ import { effectiveCapabilities, LEGACY } from '../contracts/js/capabilities.mjs'
 process.env.BLE_MASTER_KEYRING = JSON.stringify({ current: 'k1', keys: { k1: crypto.randomBytes(32).toString('base64url') } });
 
 const { handleConnectApi } = await import('../server/connect.mjs');
-const { dayBounds, dayEndAfter, PRESENCE_OFF } = await import('../server/people.mjs');
+const { dayBounds, dayEndAfter, nextDayStart, PRESENCE_OFF } = await import('../server/people.mjs');
 const { currentCapabilities } = await import('../server/capabilities.mjs');
 const worker = await import('../worker/src/lib/time.js');
 
@@ -417,7 +417,7 @@ describe("'day' at the end of a conference day", () => {
     }
   });
 
-  test('dayEndAfter is the same rule on the server and on the Worker, around midnight in each zone', () => {
+  test('dayEndAfter and nextDayStart are the same rules on the server and on the Worker, around midnight in each zone', () => {
     // Literal ends across the Los Angeles daylight saving changes of 2099: the last second of
     // 31 October (PDT) runs to the end of 1 November, a 25-hour day that ends in PST, and the last
     // second of 7 March (PST) to the end of 8 March, a 23-hour day that ends in PDT.
@@ -444,11 +444,25 @@ describe("'day' at the end of a conference day", () => {
       assert.equal(iso(dayEndAfter(Date.parse(clock), SANTIAGO)), end, clock);
       assert.equal(iso(worker.dayEndAfter(Date.parse(clock), SANTIAGO)), end, `${clock} (Worker)`);
     }
+    // The next day starts at midnight (nextDayStart, for the meet pause's retry_at): 04:00Z after
+    // the repeated hour of 4 April 2026, and 04:00Z (01:00 at UTC-3) when daylight saving time
+    // starts at midnight on 5 September 2026, when 00:00 on the 6th does not exist.
+    for (const [clock, next] of [
+      ['2026-04-05T02:30:00.000Z', '2026-04-05T04:00:00.000Z'],
+      ['2026-04-05T03:30:00.000Z', '2026-04-05T04:00:00.000Z'],
+      ['2026-04-05T04:00:00.000Z', '2026-04-06T04:00:00.000Z'],
+      ['2026-09-06T03:30:00.000Z', '2026-09-06T04:00:00.000Z'],
+      ['2026-09-06T04:00:00.000Z', '2026-09-07T03:00:00.000Z'],
+    ]) {
+      assert.equal(iso(nextDayStart(Date.parse(clock), SANTIAGO)), next, clock);
+      assert.equal(iso(worker.nextDayStart(Date.parse(clock), SANTIAGO)), next, `${clock} (Worker)`);
+    }
 
     // Around each zone's midnight, on an ordinary day, at a month's end and on both daylight saving
     // days: every 5 s from two minutes before to two minutes after, and every 50 ms from two seconds
     // before to one second after. The end is after the clock, it is today's end while that is
-    // still ahead, and otherwise (the last second) tomorrow's.
+    // still ahead, and otherwise (the last second) tomorrow's. The next day starts at the first
+    // instant whose date is not today's.
     const offsets = new Set();
     for (let k = -2 * MIN; k <= 2 * MIN; k += 5000) offsets.add(k);
     for (let k = -2000; k <= 1000; k += 50) offsets.add(k);
@@ -467,6 +481,10 @@ describe("'day' at the end of a conference day", () => {
           const today = dayBounds(t, zone).end;
           assert.equal(worker.dayBounds(t, zone).end, today);
           assert.equal(end, today > t ? today : dayBounds(t + 1000, zone).end, `${zone} ${iso(t)}`);
+          const next = nextDayStart(t, zone);
+          assert.equal(worker.nextDayStart(t, zone), next, `${zone} ${iso(t)}: the Worker agrees on the next day`);
+          assert.equal(worker.dayKey(next - 1, zone), worker.dayKey(t, zone), `${zone} ${iso(t)}: still today 1 ms before ${iso(next)}`);
+          assert.notEqual(worker.dayKey(next, zone), worker.dayKey(t, zone), `${zone} ${iso(t)}: tomorrow at ${iso(next)}`);
           checked++;
         }
       }

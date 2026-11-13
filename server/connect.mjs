@@ -59,7 +59,7 @@ import { peoplePreference, withPreference } from './preference.mjs';
 import {
   people, idx, docId, BLOCKS_INDEX, MEETS_INDEX, LIMITS, REF_RE,
   HttpError, UpstreamError, bad, forbidden, sendJson, limit, jsonBody, requireDevice, text,
-  conferenceFor, dayBounds, dayEndAfter, topicLabels, zonesFor, authenticated, updateOwnProfile, bulkOne, isAround, PRESENCE_OFF,
+  conferenceFor, dayBounds, dayEndAfter, nextDayStart, topicLabels, zonesFor, authenticated, updateOwnProfile, bulkOne, isAround, PRESENCE_OFF,
   peopleByIds, docByRef, personByRef, blockedIds, blockedBetween, blockId, dispatch, deleteWhere,
   locationOf, cellFor, distanceM, bearingDeg, reembedPending,
 } from './people.mjs';
@@ -605,9 +605,9 @@ async function requestMeet(req, res) {
     },
   });
   if ((declined.json.count ?? 0) >= DECLINES_PER_DAY) {
-    // The count starts again at midnight, one second after the day's end (23:59:59.000), so the
-    // ask can be made again from then on, also when it is refused in the last second of the day.
-    const resumeMs = day.end + 1000;
+    // The count starts again at midnight (nextDayStart), so the ask can be made again from then
+    // on, also when it is refused in the last second of the day.
+    const resumeMs = nextDayStart(now, conf.timeZone);
     throw new HttpError(429, { error: 'paused', message: 'Three people said not now today. You can ask again tomorrow.', retry_at: iso(resumeMs) }, { 'Retry-After': String(Math.max(1, Math.ceil((resumeMs - now) / 1000))) });
   }
 
