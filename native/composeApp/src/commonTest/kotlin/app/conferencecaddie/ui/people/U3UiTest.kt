@@ -33,6 +33,7 @@ import app.conferencecaddie.shared.people.ApiResult
 import app.conferencecaddie.shared.people.ConferenceInfo
 import app.conferencecaddie.shared.people.PeopleContext
 import app.conferencecaddie.shared.people.PeopleController
+import app.conferencecaddie.shared.people.PeopleKeyValue
 import app.conferencecaddie.shared.people.PeopleText
 import app.conferencecaddie.shared.people.PeopleUiState
 import app.conferencecaddie.shared.people.Person
@@ -93,6 +94,8 @@ internal class U3Rig(
     /** Bluetooth's radio and key store, or null for a phone without them. */
     ble: BlePlatform? = null,
     notifier: Notifier = NoNotifier,
+    /** The people records; one whose writes the test can make fail, for an action the phone cannot store. */
+    keyValue: PeopleKeyValue = InMemoryPeopleKeyValue(),
 ) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val clock = TestClock()
@@ -125,7 +128,7 @@ internal class U3Rig(
     val settingsOpened = MutableStateFlow(0)
 
     val controller = PeopleController(
-        InMemoryPeopleKeyValue(),
+        keyValue,
         http,
         PeopleServices(
             InMemorySecureStore(),

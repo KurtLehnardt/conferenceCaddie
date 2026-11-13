@@ -43,6 +43,7 @@ import app.conferencecaddie.shared.people.PeopleUiState
 import app.conferencecaddie.shared.people.Person
 import app.conferencecaddie.shared.people.ReportKind
 import app.conferencecaddie.shared.people.TopicRef
+import app.conferencecaddie.shared.people.WatchOutcome
 import app.conferencecaddie.ui.components.ButtonVariant
 import app.conferencecaddie.ui.components.CaddieButton
 import app.conferencecaddie.ui.components.Hairline
@@ -353,8 +354,11 @@ private fun PersonAction(person: Person, state: PeopleUiState, host: PeopleHost)
                 {
                     // One toggle at a time: a second tap in the same frame would turn the watch straight back.
                     host.launchOnce("watch:$ref") {
-                        val on = host.controller.toggleWatch(ref, name)
-                        host.showToast(if (on) PeopleStrings.watchOn(name) else PeopleStrings.stoppedWatching(name))
+                        when (val outcome = host.controller.toggleWatch(ref, name)) {
+                            is WatchOutcome.Done -> host.showToast(if (outcome.on) PeopleStrings.watchOn(name) else PeopleStrings.stoppedWatching(name))
+                            // Nothing changed: the button stays as it was, and the toast says why.
+                            is WatchOutcome.Failed -> host.showMessage(outcome.message)
+                        }
                     }
                 },
                 Modifier.semantics { toggleableState = ToggleableState(watched) },

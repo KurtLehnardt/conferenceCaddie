@@ -17,7 +17,6 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -322,7 +321,6 @@ private enum class ShareAllNotice { ShareAll, Follow }
 fun ShareAllControls(talkIds: List<String>, state: PeopleUiState, host: PeopleHost, modifier: Modifier = Modifier) {
     if (!state.features.circles || talkIds.isEmpty()) return
     val controller = host.controller
-    val scope = rememberCoroutineScope()
     val vis = state.visibility
     // As TalkPeopleBody: the actions run on the app's scope one at a time, and a message goes in a
     // toast once this card has left.
@@ -353,7 +351,8 @@ fun ShareAllControls(talkIds: List<String>, state: PeopleUiState, host: PeopleHo
 
     fun onFollow(on: Boolean) {
         when {
-            !on -> scope.launch { controller.stopFollowingInterested() }
+            // Off that the phone could not store leaves the switch on, with the message.
+            !on -> run { controller.stopFollowingInterested() }
             vis.shareNoticeSeen -> followOn()
             else -> notice = ShareAllNotice.Follow
         }
@@ -420,7 +419,6 @@ fun ShareAllControls(talkIds: List<String>, state: PeopleUiState, host: PeopleHo
 fun EndedTalkBanner(talks: PeopleTalks, state: PeopleUiState, host: PeopleHost, modifier: Modifier = Modifier) {
     if (!state.features.circles) return
     val bundle = talks.bundle ?: return
-    val scope = rememberCoroutineScope()
     var open by remember { mutableStateOf(false) }
     // The talk the user opened stays, even once it is marked as seen; one of another conference's
     // bundle is not found and is ignored.
@@ -436,7 +434,8 @@ fun EndedTalkBanner(talks: PeopleTalks, state: PeopleUiState, host: PeopleHost, 
         LucideIcon.MessagesSquare,
         modifier.testTag("ended-talk-banner").semantics { isTraversalGroup = true },
         onClose = {
-            scope.launch { host.controller.markBannerSeen(talk.talkId) }
+            // A close the phone could not store leaves the banner, and the toast says why.
+            host.scope.launch { host.controller.markBannerSeen(talk.talkId)?.let(host::showMessage) }
             pinned = null
             open = false
         },
@@ -449,7 +448,9 @@ fun EndedTalkBanner(talks: PeopleTalks, state: PeopleUiState, host: PeopleHost, 
                     {
                         pinned = talk.talkId
                         open = true
-                        scope.launch { host.controller.markBannerSeen(talk.talkId) }
+                        // The circle opens either way; a mark the phone could not store is told,
+                        // since the banner comes back.
+                        host.scope.launch { host.controller.markBannerSeen(talk.talkId)?.let(host::showMessage) }
                     },
                     Modifier.testTag("ended-see-who"),
                     variant = ButtonVariant.Tonal,

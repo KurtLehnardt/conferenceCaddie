@@ -436,19 +436,29 @@ private fun FoundCard(meetId: String, found: MeetUi.Found, host: PeopleHost) {
                     leading = { LucideImage(LucideIcon.Check, null, size = 16.dp, tint = Caddie.colors.text2) },
                 )
             } else {
+                val saveKey = "save-met:$meetId"
                 CaddieButton(
                     ConnectStrings.SAVE_PERSON,
                     {
-                        // Checked and marked before anything else: a second tap in the same frame,
+                        // One save at a time (PeopleHost.launchOnce): a second tap in the same frame,
                         // before the button gives way to "Saved under Settings", saves nobody twice.
-                        if (!host.metSaved(meetId)) {
-                            host.markMetSaved(meetId)
+                        // The person counts as saved, and the toast says so, only once the phone has
+                        // stored them; otherwise the button stays and the toast says why.
+                        if (!host.metSaved(meetId) && !host.isRunning(saveKey)) {
                             val about = found.about ?: seen?.about ?: ""
-                            host.scope.launch { host.controller.saveMet(found.name, about) }
-                            host.showToast(ConnectStrings.SAVED_TOAST)
+                            host.launchOnce(saveKey) {
+                                val err = host.controller.saveMet(found.name, about)
+                                if (err == null) {
+                                    host.markMetSaved(meetId)
+                                    host.showToast(ConnectStrings.SAVED_TOAST)
+                                } else {
+                                    host.showMessage(err)
+                                }
+                            }
                         }
                     },
                     small = true,
+                    enabled = !host.isRunning(saveKey),
                 )
             }
             CaddieButton(ConnectStrings.BACK_TO_PEOPLE, { host.openPeople() }, variant = ButtonVariant.Text, small = true)

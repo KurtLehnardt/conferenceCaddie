@@ -167,7 +167,8 @@ fun PresenceControls(
             openPanel(null)
         } else {
             panel = false
-            if (currentState.presence.on) host.scope.launch { controller.turnOffPresence() }
+            // Off that the phone could not store leaves presence on, and the toast says why.
+            if (currentState.presence.on) host.scope.launch { controller.turnOffPresence()?.let(host::showMessage) }
         }
     }
 
@@ -194,6 +195,8 @@ fun PresenceControls(
                 PositionOutcome.Denied, PositionOutcome.Approximate ->
                     if (shown.value) positionProblem = outcome else host.showPermissionProblem(positionProblemText(outcome))
                 PositionOutcome.Off, PositionOutcome.Unavailable -> Unit
+                // Nothing changed: the choice stays as it was, and the toast says why.
+                PositionOutcome.NotSaved -> host.showMessage(PeopleCommonStrings.NOT_SAVED)
             }
         }
     }
@@ -476,7 +479,8 @@ fun StillHereRow(state: PeopleUiState, host: PeopleHost, modifier: Modifier = Mo
             CaddieIconButton(
                 LucideIcon.X,
                 Strings.Common.CLOSE,
-                { if (!busy) host.scope.launch { host.controller.dismissZoneCheck() } },
+                // A close the phone could not store leaves the row, and the toast says why.
+                { if (!busy) host.scope.launch { host.controller.dismissZoneCheck()?.let(host::showMessage) } },
                 iconSize = 20.dp,
             )
         }

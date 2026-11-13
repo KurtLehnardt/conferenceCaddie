@@ -15,13 +15,20 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.datetime.TimeZone
 
-/** A [PeopleKeyValue] in memory; [map] shows what the controller stored. */
+/**
+ * A [PeopleKeyValue] in memory; [map] shows what the controller stored. While [failWrites] is true
+ * every write throws and stores nothing, as a full disk's does.
+ */
 class InMemoryPeopleKeyValue : PeopleKeyValue {
     val map = LinkedHashMap<String, String>()
+
+    @kotlin.concurrent.Volatile
+    var failWrites = false
 
     override suspend fun get(key: String): String? = map[key]
 
     override suspend fun set(key: String, value: String?) {
+        if (failWrites) error("disk I/O error")
         if (value == null) map.remove(key) else map[key] = value
     }
 }

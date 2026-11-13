@@ -287,15 +287,19 @@ internal class ConnectRuntime(
 
     fun isBlocked(slug: String, ref: String): Boolean = blocks(slug).any { it.ref == ref }
 
+    // The person's own records (blocks, the watch list, People I met, the nudge setting) change only
+    // when they can be stored: one that cannot be written stays as it was ([PeopleStore.update]'s
+    // undoOnFailure), and the exception tells the caller.
+
     suspend fun addBlock(slug: String, ref: String, displayName: String?) {
-        store.update(slug) { r -> r.copy(blocks = r.blocks.filter { it.ref != ref } + BlockedPerson(ref, displayName?.take(60))) }
+        store.update(slug, undoOnFailure = true) { r -> r.copy(blocks = r.blocks.filter { it.ref != ref } + BlockedPerson(ref, displayName?.take(60))) }
         // A blocked person's card is not found again either (a sheet re-created after the block).
         known = known - ref
         host.changed()
     }
 
     suspend fun removeBlock(slug: String, ref: String) {
-        store.update(slug) { r -> r.copy(blocks = r.blocks.filter { it.ref != ref }) }
+        store.update(slug, undoOnFailure = true) { r -> r.copy(blocks = r.blocks.filter { it.ref != ref }) }
         host.changed()
     }
 
@@ -318,7 +322,7 @@ internal class ConnectRuntime(
     /** Starts watching a person, or stops when they are already watched. Returns the new state. */
     suspend fun toggleWatch(slug: String, ref: String, displayName: String): Boolean {
         val on = !isWatched(slug, ref)
-        store.update(slug) { r ->
+        store.update(slug, undoOnFailure = true) { r ->
             r.copy(
                 watch = if (on) {
                     (r.watch + Watch(ref, displayName.take(60), Instant.fromEpochMilliseconds(now()).toString())).takeLast(WATCH_MAX)
@@ -332,13 +336,13 @@ internal class ConnectRuntime(
     }
 
     suspend fun removeWatch(slug: String, ref: String) {
-        store.update(slug) { r -> r.copy(watch = r.watch.filter { it.ref != ref }) }
+        store.update(slug, undoOnFailure = true) { r -> r.copy(watch = r.watch.filter { it.ref != ref }) }
         host.changed()
     }
 
     suspend fun addMet(slug: String, displayName: String, about: String?) {
         val person = MetPerson(displayName.take(60), (about ?: "").take(280), Instant.fromEpochMilliseconds(now()).toString())
-        store.update(slug) { r -> r.copy(met = (r.met + person).takeLast(500)) }
+        store.update(slug, undoOnFailure = true) { r -> r.copy(met = (r.met + person).takeLast(500)) }
         host.changed()
     }
 
@@ -347,7 +351,7 @@ internal class ConnectRuntime(
      * row removes nothing more, where a position would have removed the next person.
      */
     suspend fun removeMet(slug: String, person: MetPerson) {
-        store.update(slug) { r ->
+        store.update(slug, undoOnFailure = true) { r ->
             val i = r.met.indexOf(person)
             if (i < 0) r else r.copy(met = r.met.filterIndexed { j, _ -> j != i })
         }
@@ -360,7 +364,7 @@ internal class ConnectRuntime(
     fun nudgesEnabled(slug: String): Boolean = store.record(slug).nudgesOn
 
     suspend fun setNudgesEnabled(slug: String, on: Boolean) {
-        store.update(slug) { it.copy(nudgesOn = on) }
+        store.update(slug, undoOnFailure = true) { it.copy(nudgesOn = on) }
         if (!on && current?.slug == slug) current = null
         host.changed()
     }

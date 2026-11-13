@@ -9,7 +9,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -76,11 +75,11 @@ fun NudgeBanner(state: PeopleUiState, host: PeopleHost, onSeeWho: () -> Unit, mo
  */
 @Composable
 fun NudgeSetting(state: PeopleUiState, host: PeopleHost) {
-    val scope = rememberCoroutineScope()
     PeopleSwitchRow(
         PeopleText.NUDGE_SETTING_LABEL,
         state.nudgesOn,
-        { on -> scope.launch { host.controller.setNudgesEnabled(on) } },
+        // A setting the phone could not store stays as it was, and the toast says why.
+        { on -> host.scope.launch { host.controller.setNudgesEnabled(on)?.let(host::showMessage) } },
         Modifier.testTag("nudge-setting"),
         variant = SwitchRowVariant.Settings,
     )
@@ -160,21 +159,30 @@ fun PushControls(state: PeopleUiState, host: PeopleHost, variant: PushVariant, m
     fun turnOn(noticeFirst: Boolean) {
         if (host.isRunning("push")) return
         host.launchOnce("push") {
-            val outcome = run {
-                if (noticeFirst) {
-                    controller.markPushNoticeSeen()
-                    panel = null
+            if (noticeFirst) {
+                // A notice the phone could not record as seen turns nothing on: its message shows
+                // where the hint does.
+                val err = controller.markPushNoticeSeen()
+                if (err != null) {
+                    if (shown.value) panel = PushPanel.Hint(err) else host.showMessage(err)
+                    return@launchOnce
                 }
-                controller.enablePush()
+                panel = null
             }
-            show(outcome)
+            show(controller.enablePush())
         }
     }
 
     fun onSwitch(on: Boolean) {
         if (!on) {
             panel = null
-            if (push.on) host.scope.launch { controller.disablePush() }
+            // Off that the phone could not store leaves push on, and its message shows where the hint does.
+            if (push.on) {
+                host.scope.launch {
+                    val err = controller.disablePush() ?: return@launch
+                    if (shown.value) panel = PushPanel.Hint(err) else host.showMessage(err)
+                }
+            }
             return
         }
         if (!push.noticeSeen) panel = PushPanel.Notice else turnOn(noticeFirst = false)

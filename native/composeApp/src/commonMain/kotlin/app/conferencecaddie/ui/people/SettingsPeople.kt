@@ -10,7 +10,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -97,12 +96,12 @@ fun BlockedPeople(state: PeopleUiState, host: PeopleHost) {
  * button that is stretched across the row with its label centred, 12 dp out to the left, as the
  * web's computed style draws it (`controller.removeMet(person)`); then "Saved on this phone only."
  * Remove goes by the entry, not its position, and is off while that entry's removal runs: a second
- * tap, even one that lands before the screen redraws, removes nobody else.
+ * tap, even one that lands before the screen redraws, removes nobody else. A removal the phone
+ * could not store leaves the entry, and a toast gives the message.
  */
 @Composable
 fun PeopleIMet(state: PeopleUiState, host: PeopleHost) {
     if (state.met.isEmpty()) return
-    val scope = rememberCoroutineScope()
     val removing = remember { mutableStateListOf<MetPerson>() }
     SettingsGroup(ProfileStrings.PEOPLE_I_MET, Modifier.testTag("set-met")) {
         state.met.forEachIndexed { i, m ->
@@ -117,9 +116,11 @@ fun PeopleIMet(state: PeopleUiState, host: PeopleHost) {
                         {
                             if (m !in removing) {
                                 removing += m
-                                scope.launch {
+                                // On the app's scope, so a removal the phone could not store is told
+                                // even after Settings was left; the entry then stays.
+                                host.scope.launch {
                                     try {
-                                        host.controller.removeMet(m)
+                                        host.controller.removeMet(m)?.let(host::showMessage)
                                     } finally {
                                         removing -= m
                                     }
@@ -140,19 +141,20 @@ fun PeopleIMet(state: PeopleUiState, host: PeopleHost) {
 
 /**
  * People I'm watching (`state.watch`, only when not empty): each name (else "Someone") with Remove
- * (`controller.removeWatch(ref)`), then the web's footer line.
+ * (`controller.removeWatch(ref)`; a removal the phone could not store toasts the message), then the
+ * web's footer line.
  */
 @Composable
 fun PeopleIWatch(state: PeopleUiState, host: PeopleHost) {
     if (state.watch.isEmpty()) return
-    val scope = rememberCoroutineScope()
     SettingsGroup(ProfileStrings.PEOPLE_I_WATCH, Modifier.testTag("set-watch")) {
         state.watch.forEachIndexed { i, w ->
             SettingsRow(first = i == 0) {
                 Text(w.displayName.ifBlank { ProfileStrings.SOMEONE }, style = Caddie.type.body, color = Caddie.colors.text, modifier = Modifier.weight(1f))
                 CaddieButton(
                     ProfileStrings.REMOVE,
-                    { scope.launch { host.controller.removeWatch(w.ref) } },
+                    // A removal the phone could not store leaves the row, and the toast says why.
+                    { host.scope.launch { host.controller.removeWatch(w.ref)?.let(host::showMessage) } },
                     Modifier.testTag("watch-remove-${w.ref}"),
                     variant = ButtonVariant.Text,
                     small = true,

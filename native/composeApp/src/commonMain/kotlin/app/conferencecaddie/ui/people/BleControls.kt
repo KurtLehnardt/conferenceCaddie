@@ -98,7 +98,8 @@ fun BleControls(state: PeopleUiState, host: PeopleHost, variant: BleVariant, mod
         if (!on) {
             panel = false
             // In the host's scope: the stop and its `ble: false` write finish even if the screen leaves.
-            host.scope.launch { controller.turnOffBluetooth() }
+            // Off that the phone could not store leaves Bluetooth on, and the toast says why.
+            host.scope.launch { controller.turnOffBluetooth()?.let(host::showMessage) }
             return
         }
         if (!ble.noticeSeen) panel = true else turnOn()

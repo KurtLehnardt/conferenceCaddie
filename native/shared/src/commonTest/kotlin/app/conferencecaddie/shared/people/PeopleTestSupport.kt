@@ -48,13 +48,15 @@ class FakeApiHttp(var handler: suspend (SentRequest) -> HttpResponse = { json(40
     }
 }
 
-/** A key-value store in memory. */
+/** A key-value store in memory. While [failWrites] is true every write throws, as a full disk's does, and stores nothing. */
 class MapKeyValue : PeopleKeyValue {
     val map = LinkedHashMap<String, String>()
+    var failWrites = false
 
     override suspend fun get(key: String): String? = map[key]
 
     override suspend fun set(key: String, value: String?) {
+        if (failWrites) error("disk I/O error")
         if (value == null) map.remove(key) else map[key] = value
     }
 }

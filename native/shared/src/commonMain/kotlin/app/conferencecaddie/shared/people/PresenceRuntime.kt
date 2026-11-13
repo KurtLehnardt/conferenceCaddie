@@ -8,6 +8,7 @@ import kotlin.math.max
 import kotlin.math.roundToLong
 import kotlin.time.Clock
 import kotlin.time.Instant
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -30,6 +31,9 @@ enum class PositionOutcome {
 
     /** The device has no location, or the backend does not use positions (no GPS bands). */
     Unavailable,
+
+    /** The choice could not be stored on this device, so nothing changed. */
+    NotSaved,
 }
 
 /** What the controller provides to [PresenceRuntime]. */
@@ -112,6 +116,21 @@ internal class PresenceRuntime(
     private var epoch = 0
     private val writes = Mutex()
 
+    // The device writes of turn-offs under way. Presence counts as turned off only once its record
+    // is written, so an answer that arrives meanwhile waits for them before it reads [epoch]
+    // ([turnedOffSince]): a turn-off the person asked for that could not be written changes nothing,
+    // and that answer is then still recorded.
+    private val offWrites = ArrayList<CompletableDeferred<Unit>>()
+
+    /** [epoch] once every turn-off under way has written its record (or failed to). */
+    private suspend fun epochNow(): Int {
+        for (w in offWrites.toList()) w.await()
+        return epoch
+    }
+
+    /** True when presence was turned off (or ended on the server) since [started], as [epochNow] reads it. */
+    private suspend fun turnedOffSince(started: Int): Boolean = epochNow() != started
+
     // The position watch.
     private var watchJob: Job? = null
     private var watchSlug: String? = null
@@ -132,8 +151,8 @@ internal class PresenceRuntime(
     /** The zone the user last chose, for the picker's default. */
     fun lastChosenZone(): String? = lastZone
 
-    private suspend fun set(slug: String, transform: (Presence) -> Presence): Presence {
-        val next = store.setPresence(slug) { transform(live(it, now())) }
+    private suspend fun set(slug: String, undoOnFailure: Boolean = false, transform: (Presence) -> Presence): Presence {
+        val next = store.setPresence(slug, undoOnFailure) { transform(live(it, now())) }
         host.changed()
         return next
     }
@@ -192,7 +211,7 @@ internal class PresenceRuntime(
         mode: PresenceMode,
         ble: Boolean? = null,
     ): ApiResult<PresencePutResponse> {
-        val started = epoch
+        val started = epochNow()
         val keep = host.keepUntil()
         val r = putPresence(slug, zone, spot, fix, mode, ble, keep)
         if (keep && r is ApiResult.Failed && r.error.kind == PeopleError.Kind.PresenceNotActive) endedUnderKeep(slug, started)
@@ -213,7 +232,7 @@ internal class PresenceRuntime(
      * its answer (presence started again with the hour or the day) must still be recorded.
      */
     private suspend fun endedUnderKeep(slug: String, started: Int) {
-        if (epoch != started) return
+        if (turnedOffSince(started)) return
         endOnDevice(slug)
     }
 
@@ -227,14 +246,14 @@ internal class PresenceRuntime(
      * this is the person choosing the end of presence (turning it on, "Extend", "Still in {zone}?").
      */
     suspend fun turnOn(slug: String, zone: String, spot: String, mode: PresenceMode = get(slug).mode): String? {
-        val started = epoch
+        val started = epochNow()
         val r = presenceWrite { putPresence(slug, zone, spot, null, mode) }
         val res = when (r) {
             is ApiResult.Failed -> return PeopleText.presenceProblem(r.error)
             is ApiResult.Ok -> r.value
         }
         // Turned off while the write was under way: the delete queued behind it has the last word.
-        if (epoch != started) return null
+        if (turnedOffSince(started)) return null
         val until = untilOf(res)
         lastZone = zone
         val position = get(slug).positionChoice == PositionChoice.Yes && canSendPosition()
@@ -281,12 +300,30 @@ internal class PresenceRuntime(
     /**
      * Turns presence off on the device at once and tells the server once any presence write still
      * under way has finished; a failed delete is retried once.
+     *
+     * With [undoOnFailure] (the person's switch), a record that cannot be written changes nothing:
+     * presence stays on, here and on the server, nothing is sent and the exception tells the caller.
+     * Without it (the hour or the five minutes in the background running out), presence is off in
+     * memory all the same, as before, and the delete is not sent.
      */
-    suspend fun turnOff(slug: String) {
+    suspend fun turnOff(slug: String, undoOnFailure: Boolean = false) {
         val raw = store.presence(slug)
+        val writing = CompletableDeferred<Unit>()
+        offWrites += writing
+        try {
+            store.setPresence(slug, undoOnFailure) { it.off() }
+            epoch++
+        } catch (e: Throwable) {
+            if (!undoOnFailure) {
+                epoch++
+                if (raw.on) lastZone = raw.zone
+            }
+            throw e
+        } finally {
+            offWrites -= writing
+            writing.complete(Unit)
+        }
         if (raw.on) lastZone = raw.zone
-        epoch++
-        store.setPresence(slug) { it.off() }
         serverFixes.remove(slug)
         host.changed()
         if (watchedSlug == slug) clearTimers()
@@ -364,7 +401,7 @@ internal class PresenceRuntime(
      * When that moves the end of presence to another minute, a toast says until when it now runs.
      */
     suspend fun writeBle(slug: String, ble: Boolean): ApiResult<PresencePutResponse>? {
-        val started = epoch
+        val started = epochNow()
         val r = presenceWrite {
             val p = get(slug)
             val zone = p.zone
@@ -380,8 +417,9 @@ internal class PresenceRuntime(
     // under way stays off: the delete queued behind it has the last word. An end that moved to
     // another clock minute is told, so the person knows presence now runs longer than they chose.
     private suspend fun followWrite(slug: String, res: PresencePutResponse, started: Int) {
+        if (turnedOffSince(started)) return
         val before = get(slug)
-        if (epoch != started || !before.on) return
+        if (!before.on) return
         val until = untilOf(res)
         set(slug) { p -> if (p.on) p.copy(until = until, spotHidden = res.spotHidden, held = res.held) else p }
         if (watchedSlug == slug) scheduleExpiry(slug)
@@ -442,7 +480,7 @@ internal class PresenceRuntime(
 
     /** The row closed without an answer: that counts as "yes" until the next threshold. */
     suspend fun dismissZoneCheck(slug: String) {
-        set(slug) { it.copy(confirmPending = false, confirmedAt = nowIso()) }
+        set(slug, undoOnFailure = true) { it.copy(confirmPending = false, confirmedAt = nowIso()) }
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -557,7 +595,7 @@ internal class PresenceRuntime(
                 LocationAccess.Unavailable, LocationAccess.NotAsked -> PositionOutcome.Unavailable
             }
             val choice = if (outcome == PositionOutcome.Denied || outcome == PositionOutcome.Unavailable) PositionChoice.No else PositionChoice.Yes
-            set(slug) { it.copy(position = outcome == PositionOutcome.On && it.on, positionChoice = choice) }
+            set(slug, undoOnFailure = true) { it.copy(position = outcome == PositionOutcome.On && it.on, positionChoice = choice) }
             val p = get(slug)
             if (outcome == PositionOutcome.On && p.on && p.zone != null) {
                 lastSentAt = 0
@@ -566,7 +604,7 @@ internal class PresenceRuntime(
             return outcome
         }
         val before = get(slug)
-        set(slug) { it.copy(position = false, positionChoice = PositionChoice.No) }
+        set(slug, undoOnFailure = true) { it.copy(position = false, positionChoice = PositionChoice.No) }
         serverFixes.remove(slug)
         syncPositionWatch(slug)
         if (before.on && before.zone != null) {

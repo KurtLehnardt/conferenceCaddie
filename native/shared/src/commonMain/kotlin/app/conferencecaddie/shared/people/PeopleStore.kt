@@ -1,5 +1,6 @@
 package app.conferencecaddie.shared.people
 
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
@@ -42,6 +43,10 @@ internal class PeopleStore(private val kv: PeopleKeyValue, val backend: String) 
     private var profileMem: Profile? = null
     private var deleteAllMem: DeleteRetry? = null
     private val records = LinkedHashMap<String, ConferenceRecord>()
+
+    // What storage holds for each conference, as far as this store knows: what [load] read and every
+    // write that went through. An [update] that must be undone puts this back in memory.
+    private val stored = HashMap<String, ConferenceRecord>()
     private var loaded = false
 
     suspend fun load() {
@@ -52,6 +57,7 @@ internal class PeopleStore(private val kv: PeopleKeyValue, val backend: String) 
         for (slug in slugs) {
             records[slug] = read(KEY_CONFERENCE + slug, ConferenceRecord.serializer())?.sanitized() ?: ConferenceRecord()
         }
+        stored.putAll(records)
         loaded = true
     }
 
@@ -99,32 +105,81 @@ internal class PeopleStore(private val kv: PeopleKeyValue, val backend: String) 
 
     fun record(slug: String): ConferenceRecord = records[slug] ?: EMPTY_RECORD
 
-    suspend fun update(slug: String, transform: (ConferenceRecord) -> ConferenceRecord): ConferenceRecord {
+    /**
+     * Changes one conference's record in memory, then stores it. A write that fails throws, and
+     * memory keeps the change, so a record that follows what the server already did (a share it
+     * took, presence it started) stays known to this run.
+     *
+     * With [undoOnFailure], a write that fails changes nothing the next launch would not read: memory
+     * goes back to what storage holds ([stored]) unless a later change built on this one meanwhile,
+     * which then stores both or puts back the same. For a change the person asked for that nothing
+     * has acted on yet, so an action reported as not saved is neither shown nor kept.
+     */
+    suspend fun update(slug: String, undoOnFailure: Boolean = false, transform: (ConferenceRecord) -> ConferenceRecord): ConferenceRecord {
         val before = records[slug]
         val next = transform(before ?: EMPTY_RECORD)
         if (next == before) return next
         val listed = before != null
         if (next.isEmpty) {
             records.remove(slug)
-            kv.set(prefix + KEY_CONFERENCE + slug, null)
-            if (listed) writeSlugs()
+            try {
+                kv.set(prefix + KEY_CONFERENCE + slug, null)
+            } catch (e: Throwable) {
+                if (undoOnFailure && slug !in records) restore(slug)
+                throw e
+            }
+            // The record is gone: a listed slug without one reads as an empty record, which is what
+            // the next launch sees whether or not the list below can be written.
+            stored.remove(slug)
+            if (listed) {
+                try {
+                    writeSlugs()
+                } catch (e: Throwable) {
+                    if (!undoOnFailure) throw e
+                }
+            }
         } else {
             records[slug] = next
-            write(KEY_CONFERENCE + slug, next, ConferenceRecord.serializer())
-            if (!listed) writeSlugs()
+            try {
+                write(KEY_CONFERENCE + slug, next, ConferenceRecord.serializer())
+                if (!listed) writeSlugs()
+            } catch (e: Throwable) {
+                if (undoOnFailure && records[slug] === next) {
+                    restore(slug)
+                    // A new record that its list could not name is never read, but it names other
+                    // people (met, watched, blocked), so it does not stay behind.
+                    if (!listed) orElseNothing { kv.set(prefix + KEY_CONFERENCE + slug, null) }
+                }
+                throw e
+            }
+            stored[slug] = next
         }
         return next
     }
 
+    // Memory back to what storage holds for [slug].
+    private fun restore(slug: String) {
+        val kept = stored[slug]
+        if (kept == null) records.remove(slug) else records[slug] = kept
+    }
+
+    private suspend fun orElseNothing(block: suspend () -> Unit) {
+        try {
+            block()
+        } catch (e: Throwable) {
+            if (e is CancellationException) throw e
+        }
+    }
+
     fun visibility(slug: String): Visibility = record(slug).visibility
 
-    suspend fun setVisibility(slug: String, transform: (Visibility) -> Visibility): Visibility =
-        update(slug) { it.copy(visibility = transform(it.visibility).sanitized()) }.visibility
+    suspend fun setVisibility(slug: String, undoOnFailure: Boolean = false, transform: (Visibility) -> Visibility): Visibility =
+        update(slug, undoOnFailure) { it.copy(visibility = transform(it.visibility).sanitized()) }.visibility
 
     fun presence(slug: String): Presence = record(slug).presence
 
-    suspend fun setPresence(slug: String, transform: (Presence) -> Presence): Presence =
-        update(slug) { it.copy(presence = transform(it.presence)) }.presence
+    suspend fun setPresence(slug: String, undoOnFailure: Boolean = false, transform: (Presence) -> Presence): Presence =
+        update(slug, undoOnFailure) { it.copy(presence = transform(it.presence)) }.presence
 
     fun deletePending(slug: String): DeleteRetry? = record(slug).deletePending
 

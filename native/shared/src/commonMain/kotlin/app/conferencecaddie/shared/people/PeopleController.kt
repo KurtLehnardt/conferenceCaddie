@@ -63,6 +63,15 @@ sealed interface PushOutcome {
     data class Failed(val error: PeopleError) : PushOutcome
 }
 
+/** What [PeopleController.toggleWatch] ended with. */
+sealed interface WatchOutcome {
+    /** The person is watched now ([on]), or not any more. */
+    data class Done(val on: Boolean) : WatchOutcome
+
+    /** Nothing changed; [message] is the web's line for it, as an action that returns a message gives it. */
+    data class Failed(val message: String) : WatchOutcome
+}
+
 /**
  * The people features of the native apps in one place: profile and visibility sync, deletes,
  * presence, asks and meets, the inbox, nudges, the watch list, blocks, reports, circles, push and
@@ -292,19 +301,23 @@ class PeopleController(
         }
     }
 
-    /** Turns "sharing follows Interested" off; the shares made so far stay. */
-    suspend fun stopFollowingInterested(): Unit = editVisibility { it.copy(shareNew = false) }
+    /** Turns "sharing follows Interested" off; the shares made so far stay. Returns the message for a failure, or null. */
+    suspend fun stopFollowingInterested(): String? = editVisibility { it.copy(shareNew = false) }
 
-    /** The sharing notice was shown. */
-    suspend fun markShareNoticeSeen(): Unit = editVisibility { it.copy(shareNoticeSeen = true) }
+    /** The sharing notice was shown. Returns the message for a failure, or null. */
+    suspend fun markShareNoticeSeen(): String? = editVisibility { it.copy(shareNoticeSeen = true) }
 
-    /** The ended-talk banner of [talkId] was seen or closed. */
-    suspend fun markBannerSeen(talkId: String): Unit = editVisibility { it.copy(bannerSeen = (it.bannerSeen + talkId).takeLast(200)) }
+    /** The ended-talk banner of [talkId] was seen or closed. Returns the message for a failure, or null. */
+    suspend fun markBannerSeen(talkId: String): String? = editVisibility { it.copy(bannerSeen = (it.bannerSeen + talkId).takeLast(200)) }
 
-    private suspend fun editVisibility(transform: (Visibility) -> Visibility): Unit = write(Unit) {
-        val r = ready() ?: return@write
-        r.s.store.setVisibility(r.slug, transform)
+    // A change of the device's own choices: kept only once stored. Records that are not open or
+    // cannot be written leave the choice as it was and return the web's message, as
+    // [updateProfile] does.
+    private suspend fun editVisibility(transform: (Visibility) -> Visibility): String? = write(FAILED_MESSAGE) {
+        val r = ready() ?: return@write noSessionMessage()
+        r.s.store.setVisibility(r.slug, undoOnFailure = true, transform)
         publish()
+        null
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -392,11 +405,16 @@ class PeopleController(
         r.s.presenceRuntime.extend(r.slug).also { publish() }
     }
 
-    /** Turns presence off at once on the device, then on the server. */
-    suspend fun turnOffPresence(): Unit = write(Unit) {
-        val r = ready() ?: return@write
-        r.s.presenceRuntime.turnOff(r.slug)
+    /**
+     * Turns presence off at once on the device, then on the server. Returns the web's message when
+     * the device could not record it: then nothing changed, here or on the server, and presence
+     * stays on (it still ends by itself at its `until`).
+     */
+    suspend fun turnOffPresence(): String? = write(FAILED_MESSAGE) {
+        val r = ready() ?: return@write noSessionMessage()
+        r.s.presenceRuntime.turnOff(r.slug, undoOnFailure = true)
         publish()
+        null
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -416,11 +434,16 @@ class PeopleController(
         r.s.ble.turnOn(r.slug).also { publish() }
     }
 
-    /** Turns Bluetooth proximity off at the selected conference and tells the server (`ble: false`); presence stays. */
-    suspend fun turnOffBluetooth(): Unit = write(Unit) {
-        val r = ready() ?: return@write
-        r.s.ble.turnOff(r.slug)
+    /**
+     * Turns Bluetooth proximity off at the selected conference and tells the server (`ble: false`);
+     * presence stays. Returns the web's message when the device could not record it: then Bluetooth
+     * runs on as before and nothing is sent.
+     */
+    suspend fun turnOffBluetooth(): String? = write(FAILED_MESSAGE) {
+        val r = ready() ?: return@write noSessionMessage()
+        r.s.ble.turnOff(r.slug, undoOnFailure = true)
         publish()
+        null
     }
 
     /** "Still in {zone}?" answered with [zone] (the same one, or a new one). */
@@ -429,18 +452,23 @@ class PeopleController(
         r.s.presenceRuntime.confirmZone(r.slug, zone).also { publish() }
     }
 
-    /** The "Still in" row closed without an answer: that counts as yes until the next threshold. */
-    suspend fun dismissZoneCheck(): Unit = write(Unit) {
-        val r = ready() ?: return@write
+    /**
+     * The "Still in" row closed without an answer: that counts as yes until the next threshold.
+     * Returns the message for a failure (the row stays), or null.
+     */
+    suspend fun dismissZoneCheck(): String? = write(FAILED_MESSAGE) {
+        val r = ready() ?: return@write noSessionMessage()
         r.s.presenceRuntime.dismissZoneCheck(r.slug)
         publish()
+        null
     }
 
     /**
      * "Use my position too": on asks for location access if it was never asked (show
-     * [PeopleText.POSITION_EXPLAINER] first); off clears the position on the server at once.
+     * [PeopleText.POSITION_EXPLAINER] first); off clears the position on the server at once. A
+     * choice the device could not store is [PositionOutcome.NotSaved], and nothing changed.
      */
-    suspend fun sharePosition(on: Boolean): PositionOutcome = write(PositionOutcome.Unavailable) {
+    suspend fun sharePosition(on: Boolean): PositionOutcome = write(PositionOutcome.NotSaved) {
         val r = ready()?.takeIf { it.features.presence } ?: return@write PositionOutcome.Unavailable
         r.s.presenceRuntime.sharePosition(r.slug, on).also { publish() }
     }
@@ -673,19 +701,25 @@ class PeopleController(
     /** What this device knows of the other person of [meetId] (their opener and about), for after a meet. */
     suspend fun personForMeet(meetId: String): SeenPerson? = read(null) { session?.connect?.personForMeet(meetId) }
 
-    /** "Save this person" after a meet: kept on this device only, under People I met. */
-    suspend fun saveMet(displayName: String, about: String?): Unit = write(Unit) {
-        val r = ready() ?: return@write
+    /**
+     * "Save this person" after a meet: kept on this device only, under People I met. Returns null
+     * once it is stored, or the web's message when it is not (nothing was kept).
+     */
+    suspend fun saveMet(displayName: String, about: String?): String? = write(FAILED_MESSAGE) {
+        val r = ready() ?: return@write noSessionMessage()
         r.s.connect.addMet(r.slug, displayName, about)
+        null
     }
 
     /**
      * Removes [person] (an entry of [PeopleUiState.met]) from People I met. It goes by the entry
-     * itself, not its position, so a second tap on the same row removes nothing more.
+     * itself, not its position, so a second tap on the same row removes nothing more. Returns the
+     * message for a failure (the entry stays), or null.
      */
-    suspend fun removeMet(person: MetPerson): Unit = write(Unit) {
-        val r = ready() ?: return@write
+    suspend fun removeMet(person: MetPerson): String? = write(FAILED_MESSAGE) {
+        val r = ready() ?: return@write noSessionMessage()
         r.s.connect.removeMet(r.slug, person)
+        null
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -737,24 +771,33 @@ class PeopleController(
         r.s.api.report(ReportRequest(r.slug, ref, ReportContext(kind, id), reason))
     }
 
-    /** "Tell me when they're around": starts watching, or stops. Returns the new state. Device-only. */
-    suspend fun toggleWatch(ref: String, displayName: String): Boolean = write(false) {
-        val r = ready() ?: return@write false
-        r.s.connect.toggleWatch(r.slug, ref, displayName)
+    /**
+     * "Tell me when they're around": starts watching, or stops. Device-only. Returns the new state,
+     * or the web's message when it could not be stored (nothing changed).
+     */
+    suspend fun toggleWatch(ref: String, displayName: String): WatchOutcome = write(WatchOutcome.Failed(FAILED_MESSAGE)) {
+        val r = ready() ?: return@write WatchOutcome.Failed(noSessionMessage())
+        WatchOutcome.Done(r.s.connect.toggleWatch(r.slug, ref, displayName))
     }
 
-    suspend fun removeWatch(ref: String): Unit = write(Unit) {
-        val r = ready() ?: return@write
+    /** Stops watching [ref] (Settings, People I'm watching). Returns the message for a failure (they stay watched), or null. */
+    suspend fun removeWatch(ref: String): String? = write(FAILED_MESSAGE) {
+        val r = ready() ?: return@write noSessionMessage()
         r.s.connect.removeWatch(r.slug, ref)
+        null
     }
 
     // ---------------------------------------------------------------------------------------------
     // Nudges
 
-    /** The nudge setting of the selected conference ([PeopleText.NUDGE_SETTING_LABEL]); on by default. */
-    suspend fun setNudgesEnabled(on: Boolean): Unit = write(Unit) {
-        val r = ready() ?: return@write
+    /**
+     * The nudge setting of the selected conference ([PeopleText.NUDGE_SETTING_LABEL]); on by default.
+     * Returns the message for a failure (the setting stays as it was), or null.
+     */
+    suspend fun setNudgesEnabled(on: Boolean): String? = write(FAILED_MESSAGE) {
+        val r = ready() ?: return@write noSessionMessage()
         r.s.connect.setNudgesEnabled(r.slug, on)
+        null
     }
 
     suspend fun dismissNudge(): Unit = write(Unit) { session?.connect?.dismissNudge() }
@@ -825,23 +868,29 @@ class PeopleController(
         registerPush(r, token)
     }
 
-    /** Native push nudges off at the selected conference; the device's token goes when no conference uses it. */
-    suspend fun disablePush(): Unit = write(Unit) {
-        val r = ready() ?: return@write
+    /**
+     * Native push nudges off at the selected conference; the device's token goes when no conference
+     * uses it. Returns the web's message when the device could not record it: then push stays on,
+     * here and on the server, and nothing is sent.
+     */
+    suspend fun disablePush(): String? = write(FAILED_MESSAGE) {
+        val r = ready() ?: return@write noSessionMessage()
         val rec = r.s.store.record(r.slug).push
-        r.s.store.update(r.slug) { it.copy(push = it.push.copy(on = false, platform = null, token = null)) }
+        r.s.store.update(r.slug, undoOnFailure = true) { it.copy(push = it.push.copy(on = false, platform = null, token = null)) }
         publish()
         val platform = rec.platform
         val token = rec.token
         if (platform != null && token != null) r.s.api.deleteNativePush(NativePushDeleteRequest(r.slug, platform, token))
         if (r.s.store.slugsWithPush().isEmpty()) services.push.unregister()
+        null
     }
 
-    /** The push notice ([PeopleText.PUSH_NOTICE]) was shown. */
-    suspend fun markPushNoticeSeen(): Unit = write(Unit) {
-        val r = ready() ?: return@write
-        r.s.store.update(r.slug) { it.copy(push = it.push.copy(noticeSeen = true)) }
+    /** The push notice ([PeopleText.PUSH_NOTICE]) was shown. Returns the message for a failure (the notice shows again), or null. */
+    suspend fun markPushNoticeSeen(): String? = write(FAILED_MESSAGE) {
+        val r = ready() ?: return@write noSessionMessage()
+        r.s.store.update(r.slug, undoOnFailure = true) { it.copy(push = it.push.copy(noticeSeen = true)) }
         publish()
+        null
     }
 
     // ---------------------------------------------------------------------------------------------

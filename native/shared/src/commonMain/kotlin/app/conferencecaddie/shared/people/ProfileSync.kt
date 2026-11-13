@@ -878,12 +878,12 @@ internal class ProfileSync(
             // The server copy may already be hidden. The choice applies on the device and the delete
             // is tried again; after a refusal nothing changed on the server, so the device keeps the
             // earlier state too.
-            if (partlyDone) store.setVisibility(slug, patch)
+            if (partlyDone) store.setVisibility(slug, transform = patch)
             setStatus(SyncStatus(SyncStatus.State.Error, message))
             return Removed.Done(message)
         }
         if (share) return Removed.ShareInstead
-        store.setVisibility(slug, patch)
+        store.setVisibility(slug, transform = patch)
         setStatus(SyncStatus(SyncStatus.State.Saved))
         return Removed.Done(null)
     }

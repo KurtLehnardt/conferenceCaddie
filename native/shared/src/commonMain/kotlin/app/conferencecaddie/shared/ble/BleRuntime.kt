@@ -351,7 +351,19 @@ internal class BleRuntime(
      * notification): the radio, its timers and the key go at once, then, while presence is still
      * on, a presence write with `ble: false` tells the server (in the presence write queue).
      */
-    suspend fun turnOff(slug: String) {
+    suspend fun turnOff(slug: String, undoOnFailure: Boolean = false) {
+        if (undoOnFailure) {
+            // The record first, before anything stops: a switch whose record cannot be written
+            // leaves Bluetooth as it was (the radio, the key, a start under way, the problem shown)
+            // and nothing is sent; the exception tells the caller.
+            val wasOn = running(slug) || store.record(slug).ble.on || startingSlug == slug
+            store.update(slug, undoOnFailure = true) { it.copy(ble = it.ble.copy(on = false, keyId = null, rekeyW = null)) }
+            offsBySlug[slug] = (offsBySlug[slug] ?: 0) + 1
+            problems.remove(slug)
+            stop(slug)
+            if (wasOn) host.writePresenceBle(slug, false)
+            return
+        }
         offsBySlug[slug] = (offsBySlug[slug] ?: 0) + 1
         problems.remove(slug)
         turnOffAt(slug)

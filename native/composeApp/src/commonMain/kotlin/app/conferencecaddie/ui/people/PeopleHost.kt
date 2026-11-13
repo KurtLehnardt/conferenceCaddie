@@ -291,8 +291,10 @@ class PeopleHost(
                     PeopleCommonStrings.blocked(target.name),
                     PeopleToastAction(PeopleCommonStrings.UNDO) {
                         scope.launch {
-                            // As on the web, a failed Undo says nothing; the block stands.
-                            if (controller.unblock(target.ref) == null) showToast(PeopleCommonStrings.unblocked(target.name))
+                            // The web's failed Undo says nothing; here its message is a toast, so a
+                            // block that stands, or an unblock the phone could not store, is told.
+                            val err = controller.unblock(target.ref)
+                            if (err == null) showToast(PeopleCommonStrings.unblocked(target.name)) else showMessage(err)
                         }
                     },
                 )

@@ -258,7 +258,7 @@ class PeopleLiveTest {
         val h = PeopleHarness(this)
         h.start()
         h.visible()
-        assertTrue(h.controller.toggleWatch("9b1c7e5d3a2f4c60", "Ana"))
+        assertEquals(WatchOutcome.Done(on = true), h.controller.toggleWatch("9b1c7e5d3a2f4c60", "Ana"))
         h.server.matches = { page(person("9b1c7e5d3a2f4c60", name = "Ana", zone = "Hall B")) }
         h.controller.turnOnPresence("Hallway", "")
         h.controller.backgroundCheck()
@@ -270,7 +270,7 @@ class PeopleLiveTest {
         assertNull(h.state.nudge)
         h.controller.consumeReveal()
         assertNull(h.state.reveal)
-        assertFalse(h.controller.toggleWatch("9b1c7e5d3a2f4c60", "Ana"))
+        assertEquals(WatchOutcome.Done(on = false), h.controller.toggleWatch("9b1c7e5d3a2f4c60", "Ana"))
         assertTrue(h.state.watch.isEmpty())
     }
 
