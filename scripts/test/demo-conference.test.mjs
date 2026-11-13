@@ -434,14 +434,46 @@ describe('the workflows', () => {
     const y = read('demo-conference.yml');
     for (const m of y.matchAll(/uses: (\S+)/g)) assert.match(m[1], /^(\.\/\.github\/workflows\/pages\.yml|[\w-]+\/[\w-]+@[0-9a-f]{40})$/, m[1]);
     assert.equal(y.match(/secrets\.CADDIE_DEMO_ES_API_KEY/g).length, 2, 'the configuration check and the ingest step');
-    assert.ok(!/secrets\.(?!CADDIE_DEMO_ES_API_KEY)/.test(y), 'no other secret');
+    assert.equal(y.match(/secrets\.CADDIE_ADMIN_TOKEN/g).length, 2, 'the worker job\'s configuration check and push step');
+    assert.ok(!/secrets\.(?!CADDIE_DEMO_ES_API_KEY\b|CADDIE_ADMIN_TOKEN\b)/.test(y), 'no other secret');
     assert.ok(y.includes('node scripts/ingest.mjs --event "$SLUG" --skip-topics --refresh-only'), 'the schedule never creates or brings back the demo');
     assert.ok(y.includes('node scripts/demo-conference.mjs es-check'));
     assert.ok(y.includes('environment: demo-refresh'), 'the key lives in an environment only main may use');
-    assert.ok(!/npm (ci|install)/.test(y), 'nothing is installed next to the key');
+    assert.ok(!/npm (ci|install)/.test(y), 'nothing is installed next to the key or the token');
     assert.ok(y.includes("if: needs.check.outputs.stale == 'true' && needs.check.outputs.busy != 'true'"));
     assert.ok(y.includes('demo_refresh: true'));
     assert.match(y, /^permissions:\n {2}contents: read$/m);
+  });
+
+  test('demo-conference.yml: the worker job pushes the dry-run files to the Worker, with the token only in its check and its push step', () => {
+    const y = read('demo-conference.yml');
+    // The jobs, each as the text from its key to the next job's key.
+    const jobs = new Map();
+    const body = y.slice(y.indexOf('\njobs:\n') + 7);
+    const keys = [...body.matchAll(/^ {2}([\w-]+):\n/gm)];
+    keys.forEach((m, i) => jobs.set(m[1], body.slice(m.index, keys[i + 1]?.index ?? body.length)));
+    assert.deepEqual([...jobs.keys()], ['check', 'elasticsearch', 'worker', 'pages']);
+    const job = jobs.get('worker');
+    assert.ok(job.includes('    needs: check\n'));
+    assert.ok(job.includes("    if: needs.check.outputs.enabled == 'true'\n"));
+    for (const [name, other] of jobs) if (name !== 'worker') assert.ok(!other.includes('CADDIE_ADMIN_TOKEN'), `${name} never sees the admin token`);
+    // The steps of the job, each as the text from its "- " to the next one's.
+    const steps = job.split(/\n {6}- /).slice(1);
+    const withToken = steps.filter((st) => st.includes('secrets.CADDIE_ADMIN_TOKEN'));
+    assert.equal(withToken.length, 2);
+    assert.match(withToken[0], /^name: Check the configuration\n/);
+    assert.match(withToken[0], /ADMIN_TOKEN: \$\{\{ secrets\.CADDIE_ADMIN_TOKEN \}\}/);
+    assert.match(withToken[0], /if \[ -n "\$CADDIE_API_BASE" \] && \[ -n "\$ADMIN_TOKEN" \]; then echo "ready=true"/);
+    assert.match(withToken[0], /echo "::notice::Skipping the Worker: /);
+    assert.match(withToken[1], /^name: Refresh the demo conference on the Worker\n/);
+    assert.ok(withToken[1].includes('run: node worker/ingest/push-ingest.mjs --api "$CADDIE_API_BASE" --events-from "$RUNNER_TEMP/demo-report.json" --refresh-only\n'), 'a refresh never adds, shows or brings back the demo');
+    const build = steps.find((st) => st.startsWith('name: Build the demo conference files'));
+    assert.ok(build.includes('run: node scripts/ingest.mjs --event "$SLUG" --dry-run --skip-topics --report "$RUNNER_TEMP/demo-report.json"'));
+    assert.ok(!/secrets\./.test(build), 'the build step has no secret');
+    assert.ok(steps.indexOf(build) < steps.indexOf(withToken[1]), 'the files are built before the push');
+    for (const st of steps.filter((x) => !x.startsWith('name: Check the configuration'))) assert.match(st, /if: steps\.config\.outputs\.ready == 'true'/, st.split('\n')[0]);
+    assert.ok(!/npm (ci|install)|npx /.test(job), 'nothing is installed next to the token');
+    assert.ok(!y.includes('The Worker (tier 2) is not refreshed here'));
   });
 });
 

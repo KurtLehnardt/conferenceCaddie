@@ -19,6 +19,9 @@
 //   { url: '/e/{slug}#/people?around=1' } }, where body carries the other person's matched
 //   passage (<mark> stripped, about 80 characters, else their first speak topic) and the zone. No
 //   name, no ref, no profile_id, no distance and never a spot line.
+// - A push about the demo conference (invented data, demo: true in its document) says so, with the
+//   strings of server/nudge.mjs: the title is 'Conference Caddie (Demo)' and the body starts
+//   'Demo: someone', so it is never taken for a real conference's.
 // - A hidden or sample profile never takes part, as the trigger or as the other person.
 // - At most 40 push requests per call, shared across every payload of the call.
 
@@ -33,9 +36,11 @@ const EVIDENCE_MAX = 80;
 const PUSHES_PER_HOUR = 3;
 const HOUR_MS = 60 * 60_000;
 const TITLE = 'Conference Caddie';
+// The demo conference labels its pushes: the title, and the first word of the body.
+export const DEMO_TITLE = 'Conference Caddie (Demo)';
 
 const nudgeId = (day, a, b) => (a < b ? `${day}:${a}:${b}` : `${day}:${b}:${a}`);
-const body = (passage, zone) => `Someone who's worked on ${passage} is in ${zone} right now`;
+const body = (passage, zone, demo = false) => `${demo ? 'Demo: s' : 'S'}omeone who's worked on ${passage} is in ${zone} right now`;
 
 // The passage a receiver hears about the other person: their matched evidence (HTML with <mark>
 // tags) as plain text cut at a word boundary, else their plain matched passage, else their first
@@ -79,6 +84,8 @@ export async function afterPresence(ctx, me) {
     const day = dayKey(now, timeZone);
     const dayEnd = dayBounds(now, timeZone).end + 1000;
     const url = `/e/${encodeURIComponent(slug)}#/people?around=1`;
+    const demo = ctx.conf?.doc?.demo === true;
+    const title = demo ? DEMO_TITLE : TITLE;
     const { labels } = store.topics();
     // What the other person hears about me: my own words, as evidenceFor falls back to them.
     const myPassage = passageOf({ plain: self.expertise || self.about || null }, self, labels);
@@ -126,10 +133,10 @@ export async function afterPresence(ctx, me) {
         counts.set(id, (counts.get(id) ?? 0) + 1);
       }
       if (receivers.includes(self.profile_id)) {
-        await sendPush(ctx, [self.profile_id], { title: TITLE, body: body(theirPassage, zone), data: { url } }, { budget });
+        await sendPush(ctx, [self.profile_id], { title, body: body(theirPassage, zone, demo), data: { url } }, { budget });
       }
       if (receivers.includes(them.profile_id)) {
-        await sendPush(ctx, [them.profile_id], { title: TITLE, body: body(myPassage, zone), data: { url } }, { budget });
+        await sendPush(ctx, [them.profile_id], { title, body: body(myPassage, zone, demo), data: { url } }, { budget });
       }
     }
   } catch (err) {

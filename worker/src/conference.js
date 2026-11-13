@@ -13,7 +13,7 @@ import adminRoutes from './admin.js';
 import { HttpError, json, readJson, isDailyLimitError, dailyLimitResponse } from './lib/http.js';
 import { consumeAdminNonce } from './lib/admin-auth.js';
 import { newEmbedState } from './lib/embed.js';
-import { visibleUntilMs } from './lib/time.js';
+import { conferenceVisibleUntilMs } from './lib/time.js';
 import { Meter } from './lib/meter.js';
 
 // The daily usage meter (src/lib/meter.js) adds its deltas to the day's stored totals after the
@@ -99,9 +99,10 @@ export class ConferenceDO extends DurableObject {
     // meta retired_at as a number, or null when the object was never removed (or was given back).
     this.retiredAt = null;
     this.store = new Store(this);
-    // How many times this instance was wiped. A request's ctx remembers the value it started with,
-    // and its SQL throws once the value has moved (#ctx), so a request that was waiting on an await
-    // when the wipe ran cannot write into the emptied object.
+    // How many times this instance was wiped, or had its demo conference switched off (#clearDemo).
+    // A request's ctx remembers the value it started with, and its SQL throws once the value has
+    // moved (#ctx), so a request that was waiting on an await when the wipe or the switch-off ran
+    // cannot write into the emptied object (or tables).
     this.wipes = 0;
     state.blockConcurrencyWhile(async () => {
       migrate(state.storage.sql);
@@ -155,7 +156,9 @@ export class ConferenceDO extends DurableObject {
       start_date: doc.start_date ?? null,
       end_date: doc.end_date ?? null,
       status: doc.status === 'searchable' ? 'searchable' : 'unavailable',
-      visible_until_ms: doc.end_date ? visibleUntilMs(doc.end_date, doc.time_zone) : null,
+      // The end of the conference's last day in its zone; for the demo conference, DEMO_GRACE_DAYS
+      // later (lib/time.js). Profiles, push subscriptions, blocks and meets take it.
+      visible_until_ms: conferenceVisibleUntilMs(doc),
       route_prefix: doc.route_prefix,
       doc,
     };
@@ -363,6 +366,24 @@ export class ConferenceDO extends DurableObject {
     return json(200, { ok: true, deleted });
   }
 
+  // A demo conference that is switched off keeps nothing live (DECISIONS.md, "The demo conference
+  // on the Worker"), as tier 3's hide of a demo clears its presence and deletes its meets and nudges
+  // (scripts/admin/backends/es.mjs clearDemoActivity): every presence row with its Bluetooth
+  // session, the positions in memory, the Bluetooth caps record, every meet, nudge and nudge send
+  // (Store clearLiveActivity). Profiles, shared talks, blocks, reports and push subscriptions stay,
+  // and the cron purges them as for any conference; a real conference's hide keeps everything.
+  // Then, as after a wipe, the Store is replaced and wipes moves on, so a request that was waiting
+  // on an await (a presence write, or the nudge it started) can neither write a row back nor push
+  // about the demo afterwards. It runs on every document of the switched-off demo, not only on the
+  // change, so a fan-out that failed is repaired by the next one (a repeated hide); with nothing
+  // left it deletes nothing.
+  #clearDemo() {
+    this.store.clearLiveActivity();
+    this.wipes += 1;
+    this.store.close();
+    this.store = new Store(this);
+  }
+
   async #internal(request, path) {
     if (path === '/internal/wipe' && request.method === 'POST') return this.#wipe(request);
     if (path === '/internal/conference' && request.method === 'PUT') {
@@ -403,7 +424,11 @@ export class ConferenceDO extends DurableObject {
       if (superseded) return json(409, { error: 'unretire_superseded' });
       if (overtaken) return json(200, { ok: true });
       if (unretired) this.retiredAt = null;
+      // A demo conference (demo: true in this document or in the one it replaces) that is not
+      // searchable is switched off: hidden (caddie-admin conferences hide) or written unavailable.
+      const demoOff = doc.status !== 'searchable' && (doc.demo === true || this.conf?.doc?.demo === true);
       this.#setConf(doc);
+      if (demoOff) this.#clearDemo();
       return json(200, { ok: true });
     }
     if (path === '/internal/cron' && request.method === 'POST') {

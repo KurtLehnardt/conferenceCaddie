@@ -25,11 +25,21 @@
 #   Without the two settings the job only logs a notice. The first index of the demo, with its topics
 #   and facets, is the operator's `caddie-admin conferences add --event <demo slug>`
 #   (docs/ADMIN_CLI.md, "The demo conference").
+# - worker (tier 2): when the demo is on and the repository holds the variable CADDIE_API_BASE and
+#   the secret CADDIE_ADMIN_TOKEN (the two ingest.yml uses), builds today's demo files with
+#   scripts/ingest.mjs --event <demo slug> --dry-run (no Elasticsearch, no network call) and pushes
+#   them to the Worker with worker/ingest/push-ingest.mjs --events-from its report --refresh-only:
+#   the push goes ahead only while the Worker's GET /api/conferences lists the demo as searchable,
+#   so a refresh never adds the demo, shows a hidden one again or brings back a removed one (it logs
+#   a notice instead). The talk ids never change, so finalize deletes nothing and nobody's shared
+#   talks change; the topic list the Worker holds is kept. The job installs nothing, so no
+#   third-party code runs next to the token. Without the two settings the job only logs a notice.
+#   The first push of the demo, which builds its topics, is the operator's
+#   `caddie-admin conferences add --event <demo slug>` on tier 2, which runs ingest.yml for it.
 # - pages: when the live bundles are stale (the demo is on and missing or dated another day, or it is
 #   off, hidden or removed and still listed) and no ingest.yml or pages.yml run is queued or running,
 #   calls pages.yml, which regenerates the demo for today and publishes it with the vectors already
 #   published (demo_refresh), or drops it.
-# The Worker (tier 2) is not refreshed here.
 #
 # GitHub disables scheduled workflows after 60 days without repository activity; run this one by
 # hand to enable it again.
@@ -147,6 +157,51 @@ jobs:
           else
             node scripts/demo-conference.mjs es-check
           fi
+
+  worker:
+    needs: check
+    if: needs.check.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # The admin token is in the environment of this step and of the push step only, as in
+      # ingest.yml. Its value is never printed; push-ingest.mjs signs every admin request with it
+      # and never sends it.
+      - name: Check the configuration
+        id: config
+        env:
+          CADDIE_API_BASE: ${{ vars.CADDIE_API_BASE }}
+          ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}
+        run: |
+          if [ -n "$CADDIE_API_BASE" ] && [ -n "$ADMIN_TOKEN" ]; then echo "ready=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "::notice::Skipping the Worker: the CADDIE_API_BASE variable and the CADDIE_ADMIN_TOKEN secret are not both set (tier 2 is not configured)."
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+
+      - if: steps.config.outputs.ready == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - if: steps.config.outputs.ready == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      # No key and no network call: the demo is generated, and its files are written under data/.
+      - name: Build the demo conference files
+        if: steps.config.outputs.ready == 'true'
+        env:
+          SLUG: ${{ needs.check.outputs.slug }}
+        run: node scripts/ingest.mjs --event "$SLUG" --dry-run --skip-topics --report "$RUNNER_TEMP/demo-report.json"
+
+      # Node built-ins only: nothing is installed, so no third-party code runs next to the token.
+      # --refresh-only: only while the Worker lists the demo as searchable (a notice otherwise).
+      - name: Refresh the demo conference on the Worker
+        if: steps.config.outputs.ready == 'true'
+        env:
+          CADDIE_API_BASE: ${{ vars.CADDIE_API_BASE }}
+          ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}
+        run: node worker/ingest/push-ingest.mjs --api "$CADDIE_API_BASE" --events-from "$RUNNER_TEMP/demo-report.json" --refresh-only
 
   # The permissions are the ceiling for the called jobs, which narrow them, as in ingest.yml.
   pages:

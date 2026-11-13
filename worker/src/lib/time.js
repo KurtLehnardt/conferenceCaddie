@@ -19,10 +19,24 @@ export function wallToInstant(wall, timeZone) {
   return wall - zoneOffsetMs(t, timeZone);
 }
 
-// 23:59:59 on the conference's last day in its own time zone, in milliseconds.
-export function visibleUntilMs(endDate, timeZone) {
+// 23:59:59 on the conference's last day in its own time zone, in milliseconds; with graceDays,
+// that many days later (Date.UTC carries the day over into the next month or year).
+export function visibleUntilMs(endDate, timeZone, graceDays = 0) {
   const [y, m, d] = String(endDate).split('-').map(Number);
-  return wallToInstant(Date.UTC(y, m - 1, d, 23, 59, 59), timeZone);
+  return wallToInstant(Date.UTC(y, m - 1, d + graceDays, 23, 59, 59), timeZone);
+}
+
+// The demo conference (demo: true, invented data) rolls its dates every day, so its last day is
+// always tomorrow. Its people, their push subscriptions and their blocks get DEMO_GRACE_DAYS more,
+// as on tier 3 (conferenceFor's visibleUntil), so a profile saved on one day of a demonstration
+// still exists a few days later instead of running out at the end of tomorrow.
+export const DEMO_GRACE_DAYS = 7;
+
+// The end of a conference document's visibility, in milliseconds: visibleUntilMs of its end_date
+// in its zone, DEMO_GRACE_DAYS later for the demo conference. Null without an end_date.
+export function conferenceVisibleUntilMs(doc) {
+  if (!doc?.end_date) return null;
+  return visibleUntilMs(doc.end_date, doc.time_zone, doc.demo === true ? DEMO_GRACE_DAYS : 0);
 }
 
 function localParts(nowMs, timeZone) {

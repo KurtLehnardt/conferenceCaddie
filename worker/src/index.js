@@ -730,16 +730,25 @@ async function runCron(env) {
     console.error(`cron targets failed: ${res.status}`);
     return;
   }
-  const { targets, day: usageDay, usage } = await res.json();
+  const { targets, day: usageDay, usage, demo_slugs: demoSlugs } = await res.json();
   const day = utcDay(Date.now());
   const prev = usageDay === day && isPlainObject(usage) ? usage : {};
+  // The demo conference (invented data, docs/ADMIN_CLI.md "The demo conference") is visited like any
+  // other conference, for its own purge, but its usage is left out of the totals that span
+  // conferences: it is never added to another conference's others, so a demonstration cannot slow a
+  // real conference down or stop its writes, and it is not stored for GET /admin/stats. The demo's
+  // own others still hold every real conference's usage, so the demo is the one that slows down
+  // when the account is busy. Totals an earlier version stored with the demo in them are skipped
+  // the same way.
+  const demos = new Set(Array.isArray(demoSlugs) ? demoSlugs : []);
   const results = {};
   const holds = {};
+  let answered = 0;
   await Promise.all(
     targets.map(async ({ slug }) => {
       const others = { requests: 0, rows_read: 0, rows_written: 0 };
       for (const [s, u] of Object.entries(prev)) {
-        if (s === slug || u?.day !== day) continue;
+        if (s === slug || u?.day !== day || demos.has(s)) continue;
         others.requests += Number(u.requests) || 0;
         others.rows_read += Number(u.rows_read) || 0;
         others.rows_written += Number(u.rows_written) || 0;
@@ -752,7 +761,8 @@ async function runCron(env) {
         });
         if (r.ok) {
           const u = await r.json();
-          results[slug] = { day: u.day, requests: u.requests, rows_read: u.rows_read, rows_written: u.rows_written };
+          answered += 1;
+          if (!demos.has(slug)) results[slug] = { day: u.day, requests: u.requests, rows_read: u.rows_read, rows_written: u.rows_written };
           if (Number.isFinite(u.holds)) holds[slug] = u.holds;
         }
       } catch (err) {
@@ -765,5 +775,5 @@ async function runCron(env) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ day, usage: results, holds }),
   });
-  console.log(`cron conferences=${targets.length} answered=${Object.keys(results).length}`);
+  console.log(`cron conferences=${targets.length} answered=${answered}`);
 }

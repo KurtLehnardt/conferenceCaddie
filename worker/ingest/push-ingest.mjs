@@ -3,11 +3,17 @@
 //
 // Usage:
 //   node worker/ingest/push-ingest.mjs --api <base> [--event <slug> ... | --events-from <file>] [--dry-run]
-//                                      [--rebuild-topics] [--allow-shrink] [--allow-empty] [--report <file>]
+//                                      [--rebuild-topics] [--allow-shrink] [--allow-empty] [--refresh-only]
+//                                      [--report <file>]
 // --allow-shrink lets finalize delete more than 10 talks and more than 10% of a conference's talks,
 // which the Worker otherwise refuses (409) so a short feed cannot erase people's sharing.
 // --allow-empty lets a rebuilt topic list with no topics replace a stored one, which the Worker
 // (and resolveTopics, before any talk or topic is sent) otherwise refuses.
+// --refresh-only pushes only the selected conferences that the Worker lists as searchable now
+// (GET /api/conferences), and skips every other one with a notice, so a scheduled refresh never
+// adds a conference, shows a hidden one again or brings back a removed one: the demo conference's
+// daily refresh (.github/workflows/demo-conference.yml) uses it. When the list cannot be read,
+// nothing is pushed and the run fails.
 // Env: ADMIN_TOKEN, or ADMIN_TOKEN_FILE naming a file that holds it (not needed with --dry-run).
 //
 // Steps:
@@ -222,24 +228,50 @@ export function planPush({ sent, searchable, skipped }) {
   };
 }
 
-// The slugs the Worker lists as searchable (GET /api/conferences), or an empty set when it cannot
-// say, in which case nothing is kept back.
-async function liveSearchable(api) {
+/**
+ * The slugs the Worker lists as searchable (GET /api/conferences), or null when it cannot say (no
+ * answer, a status other than 200, or no conferences list). Only well-formed slugs are kept.
+ */
+export async function listedSearchable(api, fetchFn = (...a) => fetch(...a)) {
   try {
-    const res = await fetch(`${api}/api/conferences`, { signal: AbortSignal.timeout(15_000) });
-    if (!res.ok) return new Set();
+    const res = await fetchFn(`${api}/api/conferences`, { signal: AbortSignal.timeout(15_000) });
+    if (res.status !== 200) return null;
     const { conferences } = await res.json();
-    return new Set((conferences ?? []).filter((c) => c?.status === 'searchable').map((c) => c.slug));
+    if (!Array.isArray(conferences)) return null;
+    return new Set(conferences.filter((c) => c?.status === 'searchable' && typeof c.slug === 'string' && isSlug(c.slug)).map((c) => c.slug));
   } catch {
-    return new Set();
+    return null;
   }
+}
+
+// The slugs the Worker lists as searchable, or an empty set when it cannot say, in which case
+// nothing is kept back.
+async function liveSearchable(api) {
+  return (await listedSearchable(api)) ?? new Set();
+}
+
+/**
+ * --refresh-only: of the conference documents to push, those whose slug the Worker lists as
+ * searchable (`listed`, from listedSearchable). Returns { push, skipped }: the documents to push and
+ * the slugs left out. A null `listed` (the list could not be read) throws, so nothing is pushed on
+ * a guess.
+ */
+export function refreshOnly(confs, listed) {
+  if (!(listed instanceof Set)) throw new Error('--refresh-only: GET /api/conferences could not be read, so nothing was pushed.');
+  return { push: confs.filter((c) => listed.has(c.slug)), skipped: confs.filter((c) => !listed.has(c.slug)).map((c) => c.slug) };
+}
+
+// A line for the run's log; in GitHub Actions also a notice annotation. Callers pass only fixed
+// text and well-formed slugs, so the line holds no newline or workflow command of its own.
+function notice(line) {
+  console.log(process.env.GITHUB_ACTIONS === 'true' ? `::notice::${line}` : line);
 }
 
 // What reached the Worker in this run, for --report.
 const report = { upserted: [], kept: [], skipped_retired: [], pushed: [], failed: [], not_attempted: [] };
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2), { flags: ['dry-run', 'rebuild-topics', 'allow-shrink', 'allow-empty'], values: ['api', 'report', 'events-from'], multi: ['event'] });
+  const args = parseArgs(process.argv.slice(2), { flags: ['dry-run', 'rebuild-topics', 'allow-shrink', 'allow-empty', 'refresh-only'], values: ['api', 'report', 'events-from'], multi: ['event'] });
   reportFile = args.report ?? null;
   const api = normalizeApiBase(args.api);
   // Every admin request is signed with v2. A CADDIE_ADMIN_SIG_VERSION left over from the rollback
@@ -260,13 +292,24 @@ async function main() {
     console.log('The ingest run fetched no conference; nothing to push.');
     return 0;
   }
-  const confs = [];
+  let confs = [];
   for (const slug of slugs) {
     const conf = readConference(slug);
     if (!conf) throw new UsageError(`No data/${slug}/conference.json. Run scripts/ingest.mjs --event ${slug} --dry-run first.`);
     confs.push(conf);
   }
   if (!confs.length) throw new UsageError('No conferences to push.');
+  if (args['refresh-only']) {
+    const { push, skipped } = refreshOnly(confs, await listedSearchable(api));
+    for (const slug of skipped.filter((x) => typeof x === 'string' && isSlug(x))) {
+      notice(`${slug}: skipped, the Worker does not list it as searchable (never added, hidden or removed), and --refresh-only never adds or shows a conference; caddie-admin conferences add, unhide or unretire is the operator's step.`);
+    }
+    if (!push.length) {
+      console.log('Nothing to refresh.');
+      return 0;
+    }
+    confs = push;
+  }
 
   // In a dry run the Worker is only asked for the frozen topic list, and only when a token exists;
   // an unreachable Worker then means "build the list from the titles".
