@@ -1,8 +1,12 @@
 // scripts/smoke.mjs end to end against a loopback stub: the live conference of the clock-dependent checks
 // (scripts/lib/smoke-live-conference.mjs). The stub serves GET /api/conferences, the published bundles
-// (conferences.json and each bundle.json, with talks placed around the real clock), the topic lists and
-// a For-you endpoint that, like the server, suggests only talks whose end is after now. Four runs:
+// (conferences.json and each bundle.json, with talks placed around the real clock), the topic lists, the
+// schedules and a For-you endpoint that, like the server, suggests only talks whose end is after now.
+// Seven runs:
 //   - the primary conference is live: the clock-dependent checks ask it, with the KubeCon topics;
+//   - the primary is live but its AI talks have ended: r6 learns agents, which still shares a talk with
+//     Kubernetes, instead of failing on "no results";
+//   - the primary is live but For you answers nothing: the checks FAIL, they do not SKIP;
 //   - the primary has ended and a later conference is live: they ask that one, with its own topics, and
 //     r7, which stays on the primary, prints SKIP;
 //   - no conference is live: every one of them prints SKIP with the reason and none prints PASS or asks
@@ -38,10 +42,11 @@ const NONE_WHY = `every talk of ${PRIMARY} has ended and no other searchable con
 
 // A conference's talks: every talk carries topics, so the For-you stub can answer from them. `offsetH`
 // places the talks relative to the real clock (negative: ended). With `ambient`, one co-located event.
-function talks(slug, offsetH, topicSets, { ambient = false } = {}) {
+function talks(slug, offsetH, topicSets, { ambient = false, from = 0 } = {}) {
   const now = Date.now();
-  const docs = topicSets.map((topics, i) => {
-    const start = now + (offsetH + i * 0.25) * H;
+  const docs = topicSets.map((topics, k) => {
+    const i = from + k;
+    const start = now + (offsetH + k * 0.25) * H;
     return {
       talk_id: `${slug}:t${i}`, kind: 'talk', conference: slug,
       title: `Stub talk number ${i} about ${topics.join(' and ') || 'nothing'} at ${slug}`,
@@ -68,8 +73,9 @@ const conference = (slug, status, docs) => ({
   source: 'sessionize', has_level: false, track_group: null, tag_groups: [], talk_count: docs.filter((d) => d.kind === 'talk').length,
 });
 
-// The stub backend. bundles: slug -> items (every kind); order: the GET /api/conferences order.
-function stubBackend(order, bundles) {
+// The stub backend. bundles: slug -> items (every kind); order: the GET /api/conferences order. With
+// forYouEmpty, For you answers no talk to any request.
+function stubBackend(order, bundles, { forYouEmpty = false } = {}) {
   const requests = [];
   const files = new Map(); // path under /bundles/ -> bytes
   const entries = order.map(([slug, status]) => {
@@ -110,6 +116,11 @@ function stubBackend(order, bundles) {
       if (url.pathname === '/api/health') return json(res, 200, { ok: true });
       if (url.pathname === '/api/conferences') return json(res, 200, { conferences: entries.map(({ bundle, ...c }) => c) });
       if (url.pathname === '/api/topics' && req.method === 'GET') return json(res, 200, { topics: topicList(bundles[url.searchParams.get('event')] ?? []) });
+      if (url.pathname === '/api/schedule' && req.method === 'GET') {
+        const event = url.searchParams.get('event');
+        const scheduled = (bundles[event] ?? []).filter((d) => d.kind === 'talk').map((t) => ({ ...t, topics: t.topics.map((id) => ({ topic_id: id, label: labelOf(id) })) }));
+        return json(res, 200, { conference: event, talks: scheduled });
+      }
       if (url.pathname === '/api/search' && req.method === 'POST') {
         const f = body?.filters ?? {};
         if ('include_events' in f && typeof f.include_events !== 'boolean') return json(res, 400, { error: 'include_events must be a boolean' });
@@ -124,6 +135,7 @@ function stubBackend(order, bundles) {
         // As the server: learn topics only, talks whose end is after now, never a marked one.
         const learn = body.learn_topics ?? [];
         if (!learn.length && !body.interests) return json(res, 200, { results: [], needs_profile: true });
+        if (forYouEmpty) return json(res, 200, { results: [] });
         const marked = new Set(body.interested_talk_ids ?? []);
         const now = Date.now();
         const pool = (bundles[body.event] ?? []).filter((d) => d.kind === 'talk' && Date.parse(d.end) > now && !marked.has(d.talk_id));
@@ -194,15 +206,21 @@ describe('scripts/smoke.mjs live conference', { timeout: 600_000 }, () => {
   const runs = {};
   const stubs = [];
   before(async () => {
+    const aiEnded = [
+      ...talks(PRIMARY, -30, [['ai', 'kubernetes'], ['ai'], ['ai', 'gpu']]),
+      ...talks(PRIMARY, 2, [['kubernetes', 'agents'], ['agents'], ['kubernetes'], ['agents', 'gpu']], { from: 3 }),
+    ];
     const scenarios = {
       primaryLive: [[[PRIMARY, 'searchable'], [EXTRA, 'searchable'], [LIVE, 'searchable']], { [PRIMARY]: talks(PRIMARY, 2, KUBE_TOPICS, { ambient: true }), [EXTRA]: ended(EXTRA), [LIVE]: talks(LIVE, 2, GRPC_TOPICS) }, {}],
+      aiEnded: [[[PRIMARY, 'searchable'], [EXTRA, 'searchable']], { [PRIMARY]: aiEnded, [EXTRA]: ended(EXTRA) }, {}],
+      forYouEmpty: [[[PRIMARY, 'searchable'], [EXTRA, 'searchable']], { [PRIMARY]: talks(PRIMARY, 2, KUBE_TOPICS, { ambient: true }), [EXTRA]: ended(EXTRA) }, {}, { forYouEmpty: true }],
       fallback: [[[PRIMARY, 'searchable'], [UNAVAILABLE, 'unavailable'], [EXTRA, 'searchable'], [LIVE, 'searchable'], [LATER, 'searchable']], { [PRIMARY]: ended(PRIMARY), [EXTRA]: ended(EXTRA), [LIVE]: talks(LIVE, 2, GRPC_TOPICS, { ambient: true }), [LATER]: talks(LATER, 5, KUBE_TOPICS) }, {}],
       none: [[[PRIMARY, 'searchable'], [UNAVAILABLE, 'unavailable'], [EXTRA, 'searchable'], [LIVE, 'searchable']], { [PRIMARY]: ended(PRIMARY), [EXTRA]: ended(EXTRA), [LIVE]: ended(LIVE, GRPC_TOPICS) }, {}],
       override: [[[PRIMARY, 'searchable'], [EXTRA, 'searchable'], [LIVE, 'searchable'], [LATER, 'searchable']], { [PRIMARY]: ended(PRIMARY), [EXTRA]: ended(EXTRA), [LIVE]: talks(LIVE, 2, GRPC_TOPICS), [LATER]: talks(LATER, 5, KUBE_TOPICS) }, { SMOKE_LIVE_CONFERENCE: LATER }],
       badOverride: [[[PRIMARY, 'searchable'], [UNAVAILABLE, 'unavailable'], [EXTRA, 'searchable'], [LIVE, 'searchable']], { [PRIMARY]: ended(PRIMARY), [EXTRA]: ended(EXTRA), [LIVE]: talks(LIVE, 2, GRPC_TOPICS) }, { SMOKE_LIVE_CONFERENCE: UNAVAILABLE }],
     };
-    await Promise.all(Object.entries(scenarios).map(async ([name, [order, bundles, env]]) => {
-      const stub = await stubBackend(order, bundles);
+    await Promise.all(Object.entries(scenarios).map(async ([name, [order, bundles, env, opts]]) => {
+      const stub = await stubBackend(order, bundles, opts);
       stubs.push(stub);
       runs[name] = { ...(await runSmoke(stub.port, env)), requests: stub.requests };
     }));
@@ -227,6 +245,20 @@ describe('scripts/smoke.mjs live conference', { timeout: 600_000 }, () => {
     assert.doesNotMatch(lineOf(run, 'r7'), /^SKIP /, 'r7 runs while the primary has talks to come');
     const asked = new Set(learnAsked(run.requests).map((r) => r.body.event));
     assert.deepEqual([...asked].sort(), [EXTRA, PRIMARY].sort(), 'r2 asks the extra conference; every other For-you request the primary');
+  });
+
+  test('primary live with its AI talks over: r6 learns agents, which still shares a talk with Kubernetes', () => {
+    const run = runs.aiEnded;
+    assert.match(lineOf(run, 'r6'), new RegExp(`^PASS r6: .*\\(${PRIMARY}, learn agents, speak kubernetes: \\d+ results identical`));
+    assert.match(lineOf(run, 'r3'), /^PASS r3: .*suggestions for ai and agents, some carrying kubernetes, none name Kubernetes\)$/);
+    for (const id of ['p3', 'r1', 'r4', 'r8']) assert.match(lineOf(run, id), /^PASS /, id);
+  });
+
+  test('primary live but For you answers nothing: the clock-dependent checks FAIL instead of skipping', () => {
+    const run = runs.forYouEmpty;
+    assert.match(liveNote(run), new RegExp(`^NOTE live conference: ${PRIMARY} \\(the primary conference`));
+    for (const id of ['e2', 'p3', 'r1', 'r3', 'r4', 'r6', 'r8']) assert.match(lineOf(run, id), /^FAIL /, id);
+    assert.equal(run.code, 1);
   });
 
   test('primary ended and another live: the checks ask that conference with its own topics, and say so', () => {

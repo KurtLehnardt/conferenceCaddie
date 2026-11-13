@@ -496,13 +496,13 @@ class TalkSmokeTest {
             val learnSet = learn.mapNotNull { labelOf[it] }.toSet()
             return results.filter { !learnSet.containsAll(it.learnTopics) }.map { "\"${it.talk.title}\" lists a learn topic that was not sent" }
         }
-        check("r3: a request without kubernetes never names kubernetes in why") {
+        check("r3: a request without a topic never names that topic in why") {
             val learn = listOf("ai", "agents")
             val results = forYou(primary, ForYou.Request(learn, size = 50))
             val problems = ArrayList(whyProblems(results, learn))
             for (x in results) if (x.learnTopics.any { it.contains("kubernetes", ignoreCase = true) }) problems += "\"${x.talk.title}\" names Kubernetes"
             if (results.none { "kubernetes" in it.talk.topics }) problems += "no returned talk carries the kubernetes topic, so the check proves nothing"
-            report(problems.isEmpty(), "r3: a request without kubernetes never names kubernetes in why", if (problems.isEmpty()) "${results.size} suggestions, none name Kubernetes" else problems.take(3).joinToString())
+            report(problems.isEmpty(), "r3: a request without a topic never names that topic in why", if (problems.isEmpty()) "${results.size} suggestions, none name Kubernetes" else problems.take(3).joinToString())
         }
         check("r4: the topics in why are a subset of the learn topics sent") {
             fun have(vararg ids: String) = ids.filter { it in labelOf }
