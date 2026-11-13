@@ -32,7 +32,7 @@ import { DIMS, BUNDLE_FILE } from '../../contracts/js/bundle.mjs';
 import {
   buildConferenceBundle, validateBuilt, publicConference, buildIndex, parseArgs as bundleArgs, run as buildBundles, DEMO_ATTRIBUTION, ATTRIBUTION,
 } from '../build-bundles.mjs';
-import { status, prepare, esCheck, liveEntry, outputLines, parseArgs as demoArgs } from '../demo-conference.mjs';
+import { status, prepare, esCheck, workerCheck, liveEntry, outputLines, parseArgs as demoArgs } from '../demo-conference.mjs';
 import { planBuild } from '../lib/bundle-sources.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -435,7 +435,8 @@ describe('the workflows', () => {
     for (const m of y.matchAll(/uses: (\S+)/g)) assert.match(m[1], /^(\.\/\.github\/workflows\/pages\.yml|[\w-]+\/[\w-]+@[0-9a-f]{40})$/, m[1]);
     assert.equal(y.match(/secrets\.CADDIE_DEMO_ES_API_KEY/g).length, 2, 'the configuration check and the ingest step');
     assert.equal(y.match(/secrets\.CADDIE_ADMIN_TOKEN/g).length, 2, 'the worker job\'s configuration check and push step');
-    assert.ok(!/secrets\.(?!CADDIE_DEMO_ES_API_KEY\b|CADDIE_ADMIN_TOKEN\b)/.test(y), 'no other secret');
+    for (const name of ['CF_ACCESS_CLIENT_ID', 'CF_ACCESS_CLIENT_SECRET']) assert.equal(y.match(new RegExp(`secrets\\.${name}\\b`, 'g')).length, 1, `${name}: the push step only`);
+    assert.ok(!/secrets\.(?!CADDIE_DEMO_ES_API_KEY\b|CADDIE_ADMIN_TOKEN\b|CF_ACCESS_CLIENT_ID\b|CF_ACCESS_CLIENT_SECRET\b)/.test(y), 'no other secret');
     assert.ok(y.includes('node scripts/ingest.mjs --event "$SLUG" --skip-topics --refresh-only'), 'the schedule never creates or brings back the demo');
     assert.ok(y.includes('node scripts/demo-conference.mjs es-check'));
     assert.ok(y.includes('environment: demo-refresh'), 'the key lives in an environment only main may use');
@@ -445,7 +446,7 @@ describe('the workflows', () => {
     assert.match(y, /^permissions:\n {2}contents: read$/m);
   });
 
-  test('demo-conference.yml: the worker job pushes the dry-run files to the Worker, with the token only in its check and its push step', () => {
+  test('demo-conference.yml: the worker job pushes the dry-run files to the Worker, with the tokens only in the steps that need them', () => {
     const y = read('demo-conference.yml');
     // The jobs, each as the text from its key to the next job's key.
     const jobs = new Map();
@@ -453,25 +454,36 @@ describe('the workflows', () => {
     const keys = [...body.matchAll(/^ {2}([\w-]+):\n/gm)];
     keys.forEach((m, i) => jobs.set(m[1], body.slice(m.index, keys[i + 1]?.index ?? body.length)));
     assert.deepEqual([...jobs.keys()], ['check', 'elasticsearch', 'worker', 'pages']);
+    const check = jobs.get('check');
+    assert.ok(check.includes('      ingest_busy: ${{ steps.busy.outputs.ingest_busy }}\n'), 'the check job says whether an ingest run is queued or running');
+    assert.ok(check.includes('if [ "$wf" = "ingest.yml" ]; then ingest_busy=true; fi'));
+    assert.ok(check.includes('echo "ingest_busy=$ingest_busy" >> "$GITHUB_OUTPUT"'));
     const job = jobs.get('worker');
     assert.ok(job.includes('    needs: check\n'));
-    assert.ok(job.includes("    if: needs.check.outputs.enabled == 'true'\n"));
-    for (const [name, other] of jobs) if (name !== 'worker') assert.ok(!other.includes('CADDIE_ADMIN_TOKEN'), `${name} never sees the admin token`);
+    assert.ok(job.includes("    if: vars.CADDIE_API_BASE != ''\n"), 'only where tier 2 is set up');
+    for (const [name, other] of jobs) if (name !== 'worker') assert.ok(!/CADDIE_ADMIN_TOKEN|CF_ACCESS_CLIENT/.test(other), `${name} never sees the admin or Access token`);
     // The steps of the job, each as the text from its "- " to the next one's.
     const steps = job.split(/\n {6}- /).slice(1);
-    const withToken = steps.filter((st) => st.includes('secrets.CADDIE_ADMIN_TOKEN'));
-    assert.equal(withToken.length, 2);
-    assert.match(withToken[0], /^name: Check the configuration\n/);
-    assert.match(withToken[0], /ADMIN_TOKEN: \$\{\{ secrets\.CADDIE_ADMIN_TOKEN \}\}/);
-    assert.match(withToken[0], /if \[ -n "\$CADDIE_API_BASE" \] && \[ -n "\$ADMIN_TOKEN" \]; then echo "ready=true"/);
-    assert.match(withToken[0], /echo "::notice::Skipping the Worker: /);
-    assert.match(withToken[1], /^name: Refresh the demo conference on the Worker\n/);
-    assert.ok(withToken[1].includes('run: node worker/ingest/push-ingest.mjs --api "$CADDIE_API_BASE" --events-from "$RUNNER_TEMP/demo-report.json" --refresh-only\n'), 'a refresh never adds, shows or brings back the demo');
-    const build = steps.find((st) => st.startsWith('name: Build the demo conference files'));
+    const named = (n) => steps.find((st) => st.startsWith(`name: ${n}\n`));
+    const config = named('Check the configuration');
+    const build = named('Build the demo conference files');
+    const push = named('Refresh the demo conference on the Worker');
+    const warn = named('Warn when the demo is off but the Worker still lists it');
+    assert.deepEqual(steps.filter((st) => /secrets\./.test(st)), [config, push], 'secrets only in the configuration check and the push');
+    assert.match(config, /if: needs\.check\.outputs\.enabled == 'true'\n/);
+    assert.match(config, /ADMIN_TOKEN: \$\{\{ secrets\.CADDIE_ADMIN_TOKEN \}\}/);
+    assert.ok(!/CF_ACCESS/.test(config));
+    assert.match(config, /INGEST_BUSY: \$\{\{ needs\.check\.outputs\.ingest_busy \}\}/);
+    assert.match(config, /echo "::notice::Skipping the Worker: the CADDIE_ADMIN_TOKEN secret is not set/);
+    assert.match(config, /elif \[ "\$INGEST_BUSY" = "true" \]; then\n\s+echo "::notice::Skipping the Worker: an ingest\.yml run is queued or running/);
+    assert.ok(push.includes('run: node worker/ingest/push-ingest.mjs --api "$CADDIE_API_BASE" --events-from "$RUNNER_TEMP/demo-report.json" --refresh-only\n'), 'a refresh never adds, shows or brings back the demo');
+    for (const k of ['ADMIN_TOKEN: ${{ secrets.CADDIE_ADMIN_TOKEN }}', 'CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}', 'CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}']) assert.ok(push.includes(k), k);
     assert.ok(build.includes('run: node scripts/ingest.mjs --event "$SLUG" --dry-run --skip-topics --report "$RUNNER_TEMP/demo-report.json"'));
-    assert.ok(!/secrets\./.test(build), 'the build step has no secret');
-    assert.ok(steps.indexOf(build) < steps.indexOf(withToken[1]), 'the files are built before the push');
-    for (const st of steps.filter((x) => !x.startsWith('name: Check the configuration'))) assert.match(st, /if: steps\.config\.outputs\.ready == 'true'/, st.split('\n')[0]);
+    for (const st of [build, push]) assert.match(st, /if: steps\.config\.outputs\.ready == 'true'\n/, st.split('\n')[0]);
+    assert.ok(steps.indexOf(build) < steps.indexOf(push), 'the files are built before the push');
+    assert.match(warn, /if: needs\.check\.outputs\.enabled != 'true'\n/);
+    assert.ok(warn.includes('run: node scripts/demo-conference.mjs worker-check'));
+    assert.ok(warn.includes('CADDIE_API_BASE: ${{ vars.CADDIE_API_BASE }}'));
     assert.ok(!/npm (ci|install)|npx /.test(job), 'nothing is installed next to the token');
     assert.ok(!y.includes('The Worker (tier 2) is not refreshed here'));
   });
@@ -518,6 +530,42 @@ describe('hardening of the workflow steps', () => {
     assert.equal((await esCheck({ env, fetchFn: respond(200, { found: true, _source: { status: 'unavailable' } }), log: (m) => lines.push(m) })).backend, 'unavailable');
     assert.deepEqual(lines, []);
     await assert.rejects(esCheck({ env, fetchFn: respond(403, {}), log: () => {} }), /status 403/);
+  });
+
+  test('worker-check warns only when the demo is off but the Worker still lists it searchable, and sends no token', async () => {
+    const off = path.join(ROOT, 'config/demo-conference.json');
+    const env = { CADDIE_DEMO_CONFIG: off, CADDIE_API_BASE: 'https://caddie.example.invalid/' };
+    assert.equal(readJson(off).enabled, false, 'the committed switch is off');
+    const seen = [];
+    const answer = (conferences, status = 200) => async (url, init) => {
+      seen.push({ url, headers: init?.headers ?? {} });
+      return new Response(JSON.stringify({ conferences }), { status });
+    };
+    const lines = [];
+    const listed = await workerCheck({ env, fetchFn: answer([{ slug: SLUG, status: 'searchable', demo: true }, { slug: 'real-2099', status: 'searchable' }]), log: (m) => lines.push(m) });
+    assert.deepEqual(listed, { enabled: false, slug: SLUG, worker: 'searchable' });
+    assert.match(lines.join('\n'), /^::warning::The demo conference is switched off .* the Worker still lists caddie-demo-conference as searchable/);
+    assert.deepEqual(seen.map((x) => x.url), ['https://caddie.example.invalid/api/conferences']);
+    assert.deepEqual(seen[0].headers, {}, 'no token or other header is sent');
+    lines.length = 0;
+    assert.equal((await workerCheck({ env, fetchFn: answer([{ slug: 'real-2099', status: 'searchable' }]), log: (m) => lines.push(m) })).worker, 'absent');
+    assert.deepEqual(lines, [], 'a hidden or removed demo is not listed: no warning');
+    await assert.rejects(workerCheck({ env, fetchFn: answer([], 500), log: () => {} }), /status 500/);
+    await assert.rejects(workerCheck({ env, fetchFn: async () => new Response('{}', { status: 200 }), log: () => {} }), /holds no conferences/);
+    for (const bad of ['', 'http://caddie.example', 'https://user:pw@caddie.example', 'https://caddie.example/api', 'not a url']) {
+      await assert.rejects(workerCheck({ env: { ...env, CADDIE_API_BASE: bad }, fetchFn: answer([]), log: () => {} }), /CADDIE_API_BASE/, bad);
+    }
+    // Switched on, it reads nothing.
+    const onFile = path.join(tmpdir(), `demo-on-${crypto.randomBytes(4).toString('hex')}.json`);
+    writeFileSync(onFile, JSON.stringify(ON));
+    try {
+      seen.length = 0;
+      assert.deepEqual(await workerCheck({ env: { ...env, CADDIE_DEMO_CONFIG: onFile }, fetchFn: answer([]), log: () => {} }), { enabled: true, slug: SLUG, worker: 'not checked' });
+      assert.deepEqual(seen, []);
+    } finally {
+      rmSync(onFile, { force: true });
+    }
+    assert.deepEqual(outputLines({ enabled: false, slug: SLUG, worker: 'searchable' }), ['enabled=false', `slug=${SLUG}`, 'worker=searchable']);
   });
 });
 

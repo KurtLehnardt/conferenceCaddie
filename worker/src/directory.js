@@ -17,6 +17,8 @@ const RETIRE_PATH_RE = /^\/internal\/conference\/([a-z0-9][a-z0-9-]{0,119})$/;
 // The meta row that holds the order sequence of removals and unretires (see #nextSeq), and the
 // prefix of the meta row that holds, per slug, the sequence number of its latest unretire.
 const SEQ_KEY = 'order_seq';
+// The meta row that holds the counter of document writes (#nextDocSeq).
+const DOC_SEQ_KEY = 'doc_seq';
 const UNRETIRED_SEQ_PREFIX = 'unretired_seq:';
 const isSeq = (n) => Number.isSafeInteger(n) && n > 0;
 
@@ -99,6 +101,17 @@ export class DirectoryDO extends DurableObject {
     const prev = Number(this.sql.exec('SELECT v FROM meta WHERE k = ?', SEQ_KEY).toArray()[0]?.v ?? 0);
     const next = (Number.isSafeInteger(prev) && prev > 0 ? prev : 0) + 1;
     this.sql.exec('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v', SEQ_KEY, String(next));
+    return next;
+  }
+
+  // The next number of the document write counter, persisted in meta and only growing, like
+  // #nextSeq but of its own: every write of a conferences row takes one, inside the upsert's
+  // transaction, and the fan-out carries the row's number as doc_seq, so an object can tell the
+  // later of two documents of its conference whatever order their fan-outs arrive in.
+  #nextDocSeq() {
+    const prev = Number(this.sql.exec('SELECT v FROM meta WHERE k = ?', DOC_SEQ_KEY).toArray()[0]?.v ?? 0);
+    const next = (Number.isSafeInteger(prev) && prev > 0 ? prev : 0) + 1;
+    this.sql.exec('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v', DOC_SEQ_KEY, String(next));
     return next;
   }
 
@@ -279,7 +292,7 @@ export class DirectoryDO extends DurableObject {
         }
         if (mismatched.length) return;
       }
-      const current = new Map(this.sql.exec('SELECT slug, doc, route_prefix, has_object FROM conferences').toArray().map((r) => [r.slug, r]));
+      const current = new Map(this.sql.exec('SELECT slug, doc, route_prefix, has_object, doc_seq FROM conferences').toArray().map((r) => [r.slug, r]));
       for (const { doc, prefix: plannedPrefix } of planned) {
         const wasRetired = retired.has(doc.slug);
         if (wasRetired && !unretiring.has(doc.slug)) {
@@ -299,23 +312,27 @@ export class DirectoryDO extends DurableObject {
           this.sql.exec('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v', UNRETIRED_SEQ_PREFIX + doc.slug, String(seq));
         }
         const hasObject = status === 'searchable' || prev?.has_object === 1 || unretired;
+        let docSeq = Number(prev?.doc_seq ?? 0);
         if (!prev || prev.doc !== text || (hasObject && prev.has_object !== 1)) {
+          docSeq = this.#nextDocSeq();
           this.sql.exec(
-            `INSERT INTO conferences (slug, doc, status, start_date, end_date, name, route_prefix, updated_at_ms, has_object, holds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO conferences (slug, doc, status, start_date, end_date, name, route_prefix, updated_at_ms, has_object, holds, doc_seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(slug) DO UPDATE SET doc = excluded.doc, status = excluded.status, start_date = excluded.start_date,
                end_date = excluded.end_date, name = excluded.name, updated_at_ms = excluded.updated_at_ms, has_object = excluded.has_object,
-               holds = MAX(holds, excluded.holds)`,
+               holds = MAX(holds, excluded.holds), doc_seq = excluded.doc_seq`,
             // A new object is assumed to hold data until the cron has looked (holds).
-            doc.slug, text, status, doc.start_date ?? null, doc.end_date ?? null, doc.name ?? null, prefix, now, hasObject ? 1 : 0, hasObject && prev?.has_object !== 1 ? 1 : 0,
+            doc.slug, text, status, doc.start_date ?? null, doc.end_date ?? null, doc.name ?? null, prefix, now, hasObject ? 1 : 0, hasObject && prev?.has_object !== 1 ? 1 : 0, docSeq,
           );
-          current.set(doc.slug, { slug: doc.slug, doc: text, route_prefix: prefix, has_object: hasObject ? 1 : 0 });
+          current.set(doc.slug, { slug: doc.slug, doc: text, route_prefix: prefix, has_object: hasObject ? 1 : 0, doc_seq: docSeq });
         }
         if (wasRetired) {
           this.sql.exec('DELETE FROM retired WHERE slug = ?', doc.slug);
           retired.delete(doc.slug);
         }
         upserted += 1;
-        if (hasObject) searchable.push({ slug: doc.slug, doc, route_prefix: prefix, ...(unretired ? { unretired: unretireSeq.get(doc.slug) } : {}) });
+        // doc_seq: the number of the row's last write (an unchanged document keeps its number), so
+        // the object takes this document only when it is not older than the one it holds.
+        if (hasObject) searchable.push({ slug: doc.slug, doc, route_prefix: prefix, ...(unretired ? { unretired: unretireSeq.get(doc.slug) } : {}), ...(docSeq > 0 ? { doc_seq: docSeq } : {}) });
       }
     });
     if (mismatched.length) return json(409, { error: 'status_mismatch', mismatched });
@@ -373,9 +390,9 @@ export class DirectoryDO extends DurableObject {
   // day is null before the first cron run. A conference whose stored totals belong to another UTC
   // day than the cron's is left out of usage, as the cron's own sums leave it out.
   // These totals span conferences, so the demo conference (invented data) is left out of both
-  // usage and holds, as tier 3 leaves its documents out of `caddie-admin stats`. The cron no longer
-  // stores its usage (runCron in index.js); the filter here also covers totals an earlier version
-  // stored. GET /admin/stats?event=<the demo's slug> still answers for it.
+  // usage and holds, as tier 3 leaves its documents out of `caddie-admin stats`. The cron still
+  // stores its usage, because every other conference's meter counts it (runCron in index.js); it
+  // is left out only here. GET /admin/stats?event=<the demo's slug> still answers for it.
   #stats() {
     let stored = null;
     try {
@@ -407,11 +424,10 @@ export class DirectoryDO extends DurableObject {
   // The conferences whose object the cron visits, whatever their status: those with an object
   // whose end_date is at most 3 days ago, and those whose object still held personal data at the
   // last visit (holds), so a conference that turned unavailable, or ended long ago, is purged
-  // until it is empty. Returned with the usage totals the last cron run stored, and demo_slugs, the
-  // slugs of the demo conferences, which the cron leaves out of every other conference's usage.
-  // The demo conference is still a target: the cron's visit is its own cleanup (the purge of
-  // expired profiles, presence, meets and nudges, and the embedding retries), not a total that
-  // spans conferences, and a demo must be purged like any other conference.
+  // until it is empty. Returned with the usage totals the last cron run stored. The demo conference
+  // is a target like any other: the cron's visit is its own cleanup (the purge of expired profiles,
+  // presence, meets and nudges, and the embedding retries), and its usage is part of the account's
+  // load, which every other conference's meter must see.
   #cronTargets() {
     const cutoff = utcDay(Date.now() - CRON_DAYS_AFTER_END * 24 * 3600_000);
     const targets = this.#rows()
@@ -423,6 +439,6 @@ export class DirectoryDO extends DurableObject {
     } catch {
       /* keep the empty totals */
     }
-    return json(200, { targets, day: usage.day, usage: usage.usage ?? {}, demo_slugs: [...this.#demoSlugs()].sort() });
+    return json(200, { targets, day: usage.day, usage: usage.usage ?? {} });
   }
 }

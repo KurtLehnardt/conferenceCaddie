@@ -14,7 +14,7 @@ import { HttpError, json, readJson, isDailyLimitError, dailyLimitResponse } from
 import { consumeAdminNonce } from './lib/admin-auth.js';
 import { newEmbedState } from './lib/embed.js';
 import { conferenceVisibleUntilMs } from './lib/time.js';
-import { Meter } from './lib/meter.js';
+import { Meter, demoShareOf } from './lib/meter.js';
 
 // The daily usage meter (src/lib/meter.js) adds its deltas to the day's stored totals after the
 // first request of a new instance, then after 100 requests or on the first request 15 seconds or
@@ -113,7 +113,15 @@ export class ConferenceDO extends DurableObject {
 
   // The meter's own writes are unmetered calls that count their cost themselves (lib/meter.js).
   #newMeter() {
-    return new Meter({ sql: (q, ...b) => this.state.storage.sql.exec(q, ...b), exec: (q, ...b) => this.exec(q, ...b), env: this.env });
+    const meter = new Meter({ sql: (q, ...b) => this.state.storage.sql.exec(q, ...b), exec: (q, ...b) => this.exec(q, ...b), env: this.env });
+    this.#shareOf(meter);
+    return meter;
+  }
+
+  // The demo conference's own allotment of the daily budgets (DEMO_SHARE, lib/meter.js setShare);
+  // every other conference has none.
+  #shareOf(meter) {
+    meter?.setShare(this.conf?.doc?.demo === true ? demoShareOf(this.env) : null);
   }
 
   // The metered SQL: the same signature as storage.sql.exec. Every cursor is remembered so its
@@ -162,6 +170,7 @@ export class ConferenceDO extends DurableObject {
       route_prefix: doc.route_prefix,
       doc,
     };
+    this.#shareOf(this.meter);
   }
 
   // In-memory token bucket per key, refilling at perWindow per windowMs. Throws 429.
@@ -282,6 +291,12 @@ export class ConferenceDO extends DurableObject {
         // write: nothing would ever purge what it wrote, because the cron visits only conferences
         // the directory lists. Reads still answer.
         res = json(400, { error: 'conference is not available' });
+      } else if (!admin && (request.method === 'PUT' || request.method === 'POST') && this.meter.allotmentSpent(now)) {
+        // The demo conference has used up its own allotment of the day's requests or written rows
+        // (DEMO_SHARE): its public writes answer 503 daily_limit, which the clients do not retry,
+        // until 00:00 UTC. Reads still answer, at the slowest pace, and a person's own deletes are
+        // never refused.
+        res = dailyLimitResponse(now);
       } else {
         res = await route.handler(this.#ctx(request, now), request, params);
         if (!(res instanceof Response)) throw new TypeError('handler did not return a Response');
@@ -372,25 +387,28 @@ export class ConferenceDO extends DurableObject {
   // session, the positions in memory, the Bluetooth caps record, every meet, nudge and nudge send
   // (Store clearLiveActivity). Profiles, shared talks, blocks, reports and push subscriptions stay,
   // and the cron purges them as for any conference; a real conference's hide keeps everything.
-  // Then, as after a wipe, the Store is replaced and wipes moves on, so a request that was waiting
-  // on an await (a presence write, or the nudge it started) can neither write a row back nor push
-  // about the demo afterwards. It runs on every document of the switched-off demo, not only on the
-  // change, so a fan-out that failed is repaired by the next one (a repeated hide); with nothing
-  // left it deletes nothing.
+  // First, as for a wipe, wipes moves on and the Store is closed and replaced, so a request that
+  // was waiting on an await (a presence write, or the nudge it started) can no longer run SQL
+  // through its ctx or its Store: it writes no row back and starts no further push (a push request
+  // already sent goes out). That happens before the delete, so a delete that fails still leaves no
+  // old Store open. It runs on every document of the switched-off demo, not only on the change, so
+  // a fan-out that failed is repaired by the next one (a repeated hide); with nothing left it
+  // deletes nothing.
   #clearDemo() {
-    this.store.clearLiveActivity();
     this.wipes += 1;
     this.store.close();
     this.store = new Store(this);
+    this.store.clearLiveActivity();
   }
 
   async #internal(request, path) {
     if (path === '/internal/wipe' && request.method === 'POST') return this.#wipe(request);
     if (path === '/internal/conference' && request.method === 'PUT') {
-      const body = await readJson(request, new Set(['doc', 'route_prefix', 'unretired']));
+      const body = await readJson(request, new Set(['doc', 'route_prefix', 'unretired', 'doc_seq']));
       if (!body.doc || typeof body.doc.slug !== 'string' || typeof body.route_prefix !== 'string') throw new HttpError(400, { error: 'doc and route_prefix are required' });
       const unretired = body.unretired !== undefined;
       if (unretired && !isSeq(body.unretired)) throw new HttpError(400, { error: 'unretired must be a positive integer' });
+      if (body.doc_seq !== undefined && !isSeq(body.doc_seq)) throw new HttpError(400, { error: 'doc_seq must be a positive integer' });
       // A removed object takes its document back only from the fan-out of an unretire (unretired:
       // <its number in the directory's order sequence>), which also drops the marker. Any other
       // fan-out, such as one that left the Worker before the removal, is refused. An unretire is
@@ -402,8 +420,16 @@ export class ConferenceDO extends DurableObject {
       // later unretire's. The object is live then (no wipe was taken after the higher unretire, or
       // wipe_seq would be above this number), so there is nothing left for it to do.
       if (this.retiredAt !== null && !unretired) return json(409, { error: 'conference_retired' });
+      // doc_seq (the directory row's write number, directory.js #nextDocSeq): a document older than
+      // the last one this object applied is a fan-out that arrived late, after a later request's
+      // fan-out, and is ignored (200, nothing written), so the later document stays, a hidden demo
+      // included. The same number again is the same document sent again, and is applied. A
+      // fan-out without the number (an object or directory from before it) is applied as before.
+      // A wipe drops the stored number with the rest of meta; the removed object then takes only an
+      // unretire, whose document carries a newer number.
       let superseded = false;
       let overtaken = false;
+      let stale = false;
       const doc = { ...body.doc, route_prefix: body.route_prefix };
       this.state.storage.transactionSync(() => {
         if (unretired && !(body.unretired > this.#seqOf('wipe_seq'))) {
@@ -414,6 +440,11 @@ export class ConferenceDO extends DurableObject {
           overtaken = true;
           return;
         }
+        if (body.doc_seq !== undefined && body.doc_seq < this.#seqOf('doc_seq')) {
+          stale = true;
+          return;
+        }
+        if (body.doc_seq !== undefined) this.exec("INSERT INTO meta (k, v) VALUES ('doc_seq', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", String(body.doc_seq));
         this.exec("INSERT INTO meta (k, v) VALUES ('conference', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", JSON.stringify(doc));
         if (unretired) {
           this.exec("DELETE FROM meta WHERE k = 'retired_at'");
@@ -422,7 +453,7 @@ export class ConferenceDO extends DurableObject {
         }
       });
       if (superseded) return json(409, { error: 'unretire_superseded' });
-      if (overtaken) return json(200, { ok: true });
+      if (overtaken || stale) return json(200, { ok: true });
       if (unretired) this.retiredAt = null;
       // A demo conference (demo: true in this document or in the one it replaces) that is not
       // searchable is switched off: hidden (caddie-admin conferences hide) or written unavailable.

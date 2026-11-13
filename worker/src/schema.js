@@ -267,4 +267,9 @@ export function migrateDirectory(sql) {
     sql.exec('ALTER TABLE conferences ADD COLUMN holds INTEGER NOT NULL DEFAULT 0');
     sql.exec('UPDATE conferences SET holds = 1 WHERE has_object = 1');
   }
+  // doc_seq: the number of the row's last document write, from the directory's rising doc_seq
+  // counter (directory.js #upsert). The fan-out carries it, and an object ignores a document older
+  // than the last one it applied, so two fan-outs that arrive out of order cannot leave the older
+  // document in place. A row from before the column has 0, which every object applies.
+  if (!cols.has('doc_seq')) sql.exec('ALTER TABLE conferences ADD COLUMN doc_seq INTEGER NOT NULL DEFAULT 0');
 }

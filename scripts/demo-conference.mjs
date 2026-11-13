@@ -4,6 +4,7 @@
 //   node scripts/demo-conference.mjs status [--live <bundle base>]
 //   node scripts/demo-conference.mjs prepare [--data <dir>] [--staged <slug,slug>]
 //   node scripts/demo-conference.mjs es-check
+//   node scripts/demo-conference.mjs worker-check
 //
 // status   says whether the demo is switched on and active (on, and neither hidden nor removed in
 //          data/conference-operator.json), its slug and today's window in its zone. With --live (an
@@ -23,11 +24,15 @@
 //          scheduled job's narrow key) while the demo is switched off, and warns (a GitHub
 //          ::warning:: line) when the backend still lists it as searchable: switching it off on
 //          tier 3 needs `caddie-admin conferences hide` or `remove` too.
+// worker-check is the same for the Worker (tier 2): while the demo is switched off, it reads the
+//          Worker's public GET <CADDIE_API_BASE>/api/conferences, with no token, and warns when the
+//          Worker still lists the demo as searchable (the Worker leaves a hidden demo out).
 // A configuration that does not parse or validate makes status and prepare warn and treat the demo
 // as off, so a mistake in it never stops the bundle build of the real conferences; the ingest itself
 // refuses it only when the demo is asked for. Every command prints key=value lines for the workflow
 // and appends them to GITHUB_OUTPUT when it is set; a value with a line break is refused. Exit codes:
-// 0 success, 1 on a failed ingest or Elasticsearch read, 2 on bad arguments. Node built-ins only.
+// 0 success, 1 on a failed ingest, Elasticsearch read or Worker read, 2 on bad arguments. Node
+// built-ins only.
 
 import { appendFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -37,7 +42,7 @@ import { readDemoConfig, buildDemo, demoToday, isCivilDay } from './lib/demo-con
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LIVE_MAX_BYTES = 5_000_000;
-const COMMANDS = ['status', 'prepare', 'es-check'];
+const COMMANDS = ['status', 'prepare', 'es-check', 'worker-check'];
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,119}$/;
 
 class UsageError extends Error {}
@@ -183,6 +188,44 @@ export async function esCheck({ root = ROOT, env = process.env, fetchFn = global
   return { enabled: false, slug: config.slug, backend: held };
 }
 
+// The Worker's origin from CADDIE_API_BASE: https, or http only for a loopback host, with no user
+// name, password, path, query or fragment beyond a final "/". Throws otherwise.
+function workerOrigin(value) {
+  let u;
+  try {
+    u = new URL(String(value ?? '').trim());
+  } catch {
+    throw new Error('worker-check needs CADDIE_API_BASE, the Worker\'s https origin.');
+  }
+  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+  if (!(u.protocol === 'https:' || (u.protocol === 'http:' && loopback)) || u.username || u.password || (u.pathname !== '/' && u.pathname !== '') || u.search || u.hash) {
+    throw new Error('worker-check needs CADDIE_API_BASE to be the Worker\'s https origin, with no path.');
+  }
+  return u.origin;
+}
+
+/**
+ * While the demo is off, warns when the Worker (tier 2) still lists it as searchable in its public
+ * GET /api/conferences (no token is sent). Returns { enabled, slug, worker } where worker is
+ * 'absent', 'searchable', 'unavailable' or 'not checked'.
+ */
+export async function workerCheck({ root = ROOT, env = process.env, fetchFn = globalThis.fetch, log = (m) => console.log(m) } = {}) {
+  const config = configOrWarn(root, env, log);
+  if (!config) return { enabled: false, slug: '', worker: 'not checked' };
+  if (config.enabled) return { enabled: true, slug: config.slug, worker: 'not checked' };
+  const origin = workerOrigin(env.CADDIE_API_BASE);
+  const res = await fetchFn(`${origin}/api/conferences`, { redirect: 'error', signal: AbortSignal.timeout(60_000) });
+  if (res.status !== 200) throw new Error(`reading the Worker's conference list failed with status ${res.status}`);
+  const list = (await res.json())?.conferences;
+  if (!Array.isArray(list)) throw new Error('the Worker\'s conference list holds no conferences');
+  const entry = list.find((c) => c?.slug === config.slug);
+  const held = !entry ? 'absent' : entry.status === 'searchable' ? 'searchable' : 'unavailable';
+  if (held === 'searchable') {
+    log(`::warning::The demo conference is switched off in config/demo-conference.json, but the Worker still lists ${config.slug} as searchable, with frozen dates. Run caddie-admin conferences hide or remove for it (docs/ADMIN_CLI.md, "The demo conference").`);
+  }
+  return { enabled: false, slug: config.slug, worker: held };
+}
+
 /** The key=value lines of a result; a key or value that could break the GITHUB_OUTPUT format is refused. */
 export function outputLines(values) {
   return Object.entries(values).map(([k, v]) => {
@@ -205,12 +248,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     opts = parseArgs(process.argv.slice(2));
   } catch (err) {
     console.error(err.message);
-    console.error('Usage: node scripts/demo-conference.mjs status [--live <bundle base>] | prepare [--data <dir>] [--staged <slug,...>] | es-check');
+    console.error('Usage: node scripts/demo-conference.mjs status [--live <bundle base>] | prepare [--data <dir>] [--staged <slug,...>] | es-check | worker-check');
     process.exit(2);
   }
   try {
     if (opts.command === 'status') emit(await status({ live: opts.live }));
     else if (opts.command === 'prepare') emit(prepare({ dataDir: opts.data, staged: opts.staged }));
+    else if (opts.command === 'worker-check') emit(await workerCheck());
     else emit(await esCheck());
   } catch (err) {
     console.error(`demo-conference: ${err.message}`);

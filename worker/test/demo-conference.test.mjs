@@ -3,16 +3,21 @@
 // - The label: GET /api/conferences carries demo: true on the demo only, and leaves a demo that is
 //   not searchable out; a nudge about the demo says "Demo" in its title and body (the strings of
 //   server/nudge.mjs), and a real conference's nudge is unchanged.
-// - Cross-conference exclusion: the cron leaves the demo's usage out of every other conference's
-//   meter and out of GET /admin/stats, while it still visits the demo for its own purge.
+// - The budgets: every real conference's meter counts the demo's load, the demo has its own
+//   allotment (DEMO_SHARE) on which it slows down and then refuses its public writes, and GET
+//   /admin/stats leaves it out of the totals it shows; the cron still visits it for its own purge.
 // - The daily refresh: push-ingest.mjs pushes the generated demo for one day and then the next;
 //   the talk ids are the same, so finalize deletes nothing, no shared talk is unshared, no profile
 //   is deleted and FINALIZE_MAX_DELETE never refuses. With --refresh-only it pushes only while the
-//   Worker lists the demo as searchable, so a refresh never adds, shows or brings back the demo.
+//   Worker lists the demo as searchable, and writes it only while its row is still searchable
+//   (expect_status), so a refresh never adds, shows or brings back the demo; push-ingest's main()
+//   runs as a child process against the Worker for that.
 // - The demo's people last DEMO_GRACE_DAYS past its last day, the same number as tier 3's.
 // - Switching it off: a hidden demo deletes its presence (with the Bluetooth session), positions,
 //   Bluetooth caps, meets, nudges and nudge sends, keeps its profiles, and leaves the public list;
-//   a real conference's hide keeps everything; a removed demo leaves no row.
+//   a real conference's hide keeps everything; a removed demo leaves no row. A nudge that was
+//   sending when the demo was hidden sends nothing more, a cleanup that fails leaves no old Store
+//   open, and a fan-out that arrives after a later one is ignored (doc_seq).
 // - The tier 2 CLI (scripts/admin/backends/worker.mjs, under the command layer of
 //   scripts/admin/commands/conferences.mjs) marks the demo in conferences list and still reaches a
 //   hidden demo, which the Worker no longer lists, for hide, unhide and unretire.
@@ -25,7 +30,10 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import http from 'node:http';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDecipheriv, createECDH, createHash, hkdfSync, randomBytes } from 'node:crypto';
@@ -35,7 +43,8 @@ import { buildDemo, DEFAULT_DEMO_CONFIG } from '../../scripts/lib/demo-conferenc
 import { CONFERENCE_FIELDS } from '../../contracts/js/bundle.mjs';
 import { validator } from '../../contracts/js/schemas.mjs';
 import { formatErrors } from '../../contracts/js/validate.mjs';
-import { listedSearchable, pushEvent, refreshOnly, upsertConferences, workerTalks } from '../ingest/push-ingest.mjs';
+import { listedSearchable, pushEvent, refreshOnly, upsertConferences, upsertRefreshing, workerTalks } from '../ingest/push-ingest.mjs';
+import { Meter, demoShareOf } from '../src/lib/meter.js';
 import { DEMO_GRACE_DAYS, conferenceVisibleUntilMs, visibleUntilMs } from '../src/lib/time.js';
 import { DEMO_GRACE_DAYS as TIER3_DEMO_GRACE_DAYS } from '../../server/people-shared.mjs';
 import { loadStoplist } from '../ingest/topics-local.mjs';
@@ -97,22 +106,28 @@ function realEnv(objectEnv = {}) {
   };
 }
 
+// Silences the console while fn runs. Calls may overlap (the bridge server below serves a child
+// process while the test sends its own requests), so the console comes back when the last ends.
+let quiet = 0;
+let loud = null;
 async function quietly(fn) {
-  const { log, error, warn } = console;
-  console.log = () => {};
-  console.error = () => {};
-  console.warn = () => {};
+  if (quiet++ === 0) {
+    loud = { log: console.log, error: console.error, warn: console.warn };
+    console.log = () => {};
+    console.error = () => {};
+    console.warn = () => {};
+  }
   try {
     return await fn();
   } finally {
-    Object.assign(console, { log, error, warn });
+    if (--quiet === 0) Object.assign(console, loud);
   }
 }
 
 async function call(env, req) {
   return quietly(async () => {
     const res = await worker.fetch(req, env);
-    return { status: res.status, json: await res.json().catch(() => null) };
+    return { status: res.status, json: await res.json().catch(() => null), headers: res.headers };
   });
 }
 
@@ -159,6 +174,7 @@ function adminVia(ctx, log = []) {
     if (r.status < 200 || r.status >= 300) {
       const err = new Error(`${method} ${path}: ${r.status} ${JSON.stringify(r.json)}`);
       err.status = r.status;
+      err.body = r.json;
       throw err;
     }
     return r.json;
@@ -271,12 +287,9 @@ function vapidEnv() {
   return { VAPID_PUBLIC_KEY: b64u(v.getPublicKey()), VAPID_PRIVATE_KEY: b64u(Buffer.concat([Buffer.alloc(32 - d.length), d])), VAPID_SUBJECT: 'mailto:operator@example.invalid' };
 }
 
-// Two people of one conference whose texts match each other, each with a push subscription, turn
-// presence on in the same zone; the second write's nudge pushes to both. Returns the decrypted
-// payloads.
-async function nudgePair(slug, doc) {
-  const ctx = realEnv(vapidEnv());
-  await putConferences(ctx, [doc]);
+// Two people of one conference whose texts match each other, each with a profile and a push
+// subscription. A nudge between them, once both are around in one zone, pushes to both.
+async function nudgePeople(ctx, slug) {
   const people = [
     { device: { id: 'a'.repeat(22), secret: 'a'.repeat(43) }, profile: { display_name: 'Ann', interests: 'eBPF tracing for kernel observability', expertise: 'service mesh traffic routing' } },
     { device: { id: 'b'.repeat(22), secret: 'b'.repeat(43) }, profile: { display_name: 'Bob', interests: 'service mesh traffic routing', expertise: 'eBPF tracing for kernel observability' } },
@@ -290,20 +303,40 @@ async function nudgePair(slug, doc) {
     ok(await api(ctx, 'PUT', '/api/push/subscription', { event: slug, subscription: { endpoint: p.endpoint, keys: { p256dh: b64u(p.ecdh.getPublicKey()), auth: b64u(p.auth) } } }, p.device));
   }
   await ctx.settle();
+  return people;
+}
+
+// Replaces fetch (the push service) for fn: every push is recorded and answered 201, after
+// hold(push) resolves when hold is given.
+async function withPushService(fn, hold = null) {
   const sent = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
-    sent.push({ url: String(url), body: new Uint8Array(await new Response(init?.body).arrayBuffer()) });
+    const push = { url: String(url), body: new Uint8Array(await new Response(init?.body).arrayBuffer()) };
+    sent.push(push);
+    if (hold) await hold(push);
     return new Response(null, { status: 201 });
   };
   try {
+    return await fn(sent);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+// The two people turn presence on in one zone; the second write's nudge pushes to both. Returns
+// the decrypted payloads.
+async function nudgePair(slug, doc) {
+  const ctx = realEnv(vapidEnv());
+  await putConferences(ctx, [doc]);
+  const people = await nudgePeople(ctx, slug);
+  const sent = await withPushService(async (pushes) => {
     for (const p of people) {
       ok(await api(ctx, 'PUT', '/api/presence', { event: slug, zone: 'Hallway', until: 'hour' }, p.device));
       await quietly(() => ctx.settle());
     }
-  } finally {
-    globalThis.fetch = realFetch;
-  }
+    return pushes;
+  });
   return people.map((p) => {
     const mine = sent.filter((s) => s.url === p.endpoint);
     assert.equal(mine.length, 1, `${p.profile.display_name} gets one push`);
@@ -327,46 +360,122 @@ describe('nudges', { skip }, () => {
       }
     });
   });
+
+  test('a nudge that was sending when the demo was hidden sends no further push and writes nothing back', async () => {
+    await withFixedClock(T0, async () => {
+      const ctx = realEnv(vapidEnv());
+      await putConferences(ctx, [demoConf(DAY)]);
+      const [ann, bob] = await nudgePeople(ctx, DEMO);
+      let release = null;
+      let holding = false;
+      const sent = await withPushService(async (pushes) => {
+        ok(await api(ctx, 'PUT', '/api/presence', { event: DEMO, zone: 'Hallway', until: 'hour' }, ann.device));
+        await quietly(() => ctx.settle());
+        assert.equal(pushes.length, 0, 'nobody else is around yet');
+        // Bob's write starts the nudge, whose first push is held at the push service.
+        ok(await api(ctx, 'PUT', '/api/presence', { event: DEMO, zone: 'Hallway', until: 'hour' }, bob.device));
+        const settled = quietly(() => ctx.settle());
+        while (!holding) await new Promise((r) => setImmediate(r));
+        assert.deepEqual(await putConferences(ctx, [hiddenDemo()]), { upserted: 1, searchable: 0, synced: 1, skipped_retired: [] });
+        release();
+        await settled;
+        return pushes;
+      }, () => {
+        holding = true;
+        return new Promise((r) => { release = r; });
+      });
+      assert.equal(sent.length, 1, 'only the push already sent; the second one of the pair is never started');
+      const db = ctx.db(`conference:${DEMO}`);
+      for (const t of LIVE) assert.equal(counts(db)[t], 0, `${t}: nothing written back after the cleanup`);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------------------------
 
-describe('totals that span conferences', { skip }, () => {
-  test('the cron visits the demo but leaves its usage out of every other conference\'s meter and out of GET /admin/stats', async () => {
+describe('the budgets: the account\'s and the demo\'s own', { skip }, () => {
+  const storedUsage = (ctx) => JSON.parse(rows(ctx.db('directory:global'), "SELECT v FROM meta WHERE k = 'usage'")[0].v);
+
+  test('every real conference\'s meter counts the demo\'s load, while GET /admin/stats leaves the demo out', async () => {
     await withFixedClock(T0, async () => {
-      const ctx = realEnv();
+      const ctx = realEnv({ DAILY_REQUEST_BUDGET: '1000', DEMO_SHARE: '0.5' });
       await putConferences(ctx, [realConf(), realConf(REAL2), demoConf(DAY)]);
-      for (const [slug, n] of [[REAL, 2], [REAL2, 3], [DEMO, 5]]) for (let i = 0; i < n; i++) ok(await api(ctx, 'GET', `/api/topics?event=${slug}`));
+      for (const [slug, n] of [[REAL, 2], [REAL2, 3], [DEMO, 40]]) for (let i = 0; i < n; i++) ok(await api(ctx, 'GET', `/api/topics?event=${slug}`));
       // People in REAL and the demo, so both still hold personal data after the cron's visit.
       await populatePeople(ctx.obj(REAL), REAL);
       await populatePeople(ctx.obj(DEMO), DEMO);
       const targets = await (await ctx.env.DIRECTORY.get({ name: 'global' }).fetch('https://directory.internal/internal/cron-targets')).json();
       assert.ok(targets.targets.some((t) => t.slug === DEMO), 'the cron still visits the demo, for its own purge');
-      assert.deepEqual(targets.demo_slugs, [DEMO]);
 
       await cron(ctx);
-      const storedUsage = () => JSON.parse(rows(ctx.db('directory:global'), "SELECT v FROM meta WHERE k = 'usage'")[0].v);
-      const first = storedUsage();
-      assert.deepEqual(Object.keys(first.usage).sort(), [REAL, REAL2].sort(), 'the demo\'s usage is not stored');
-      assert.ok(ctx.obj(DEMO).meter.report().requests >= 5, 'the demo was metered and visited');
+      const first = storedUsage(ctx);
+      assert.deepEqual(Object.keys(first.usage).sort(), [DEMO, REAL, REAL2].sort(), 'the demo\'s usage is stored, for the next run\'s others');
+      assert.ok(first.usage[DEMO].requests >= 40);
+      const paceBefore = ctx.obj(REAL).meter.pace();
+      assert.equal(paceBefore, 1);
 
-      // Totals stored by an earlier version, with the demo in them, are left out the same way.
-      const day = first.day;
-      ctx.db('directory:global').prepare("UPDATE meta SET v = ? WHERE k = 'usage'").run(JSON.stringify({ day, usage: { ...first.usage, [DEMO]: { day, requests: 1000, rows_read: 1000, rows_written: 1000 } } }));
       const stats = await send(ctx, 'GET', '/admin/stats');
       ok(stats);
-      assert.deepEqual(Object.keys(stats.json.usage).sort(), [REAL, REAL2].sort());
+      assert.deepEqual(Object.keys(stats.json.usage).sort(), [REAL, REAL2].sort(), 'the shown totals leave the demo out');
       assert.deepEqual(stats.json.holds, { [REAL]: true }, 'the demo, which holds people too, is not among the holds');
       assert.deepEqual(rows(ctx.db('directory:global'), 'SELECT slug FROM conferences WHERE holds = 1 ORDER BY slug').map((r) => r.slug), [DEMO, REAL].sort(), 'the directory still records that the demo holds data, so the cron keeps purging it');
 
       await cron(ctx);
       const others = (slug) => ctx.obj(slug).meter.others;
-      assert.equal(others(REAL).requests, first.usage[REAL2].requests, 'a real conference counts the other real one only');
-      assert.equal(others(REAL2).requests, first.usage[REAL].requests);
-      assert.equal(others(REAL).rows_written, first.usage[REAL2].rows_written);
+      assert.equal(others(REAL).requests, first.usage[REAL2].requests + first.usage[DEMO].requests, 'a real conference counts the demo\'s load');
+      assert.equal(others(REAL).rows_written, first.usage[REAL2].rows_written + first.usage[DEMO].rows_written);
       assert.equal(others(DEMO).requests, first.usage[REAL].requests + first.usage[REAL2].requests, 'the demo counts every real conference');
-      assert.deepEqual(Object.keys(storedUsage().usage).sort(), [REAL, REAL2].sort());
+      assert.ok(ctx.obj(REAL).meter.pace() > paceBefore, 'a real conference\'s pace reacts to the demo\'s load');
     });
+  });
+
+  test('the demo slows down on its own allotment, then refuses its public writes with 503 daily_limit; a real conference with the same load does not', async () => {
+    await withFixedClock(T0, async () => {
+      // An allotment of 10 requests (0.1 of 100).
+      const ctx = realEnv({ DAILY_REQUEST_BUDGET: '100', DEMO_SHARE: '0.1' });
+      await putConferences(ctx, [realConf(), demoConf(DAY)]);
+      const device = { id: 'd'.repeat(22), secret: 'd'.repeat(43) };
+      const profile = (slug) => ({ event: slug, profile: { display_name: 'Dee', about: 'kernel things' }, open_to_meet: true, shared_talk_ids: [] });
+      for (const slug of [DEMO, REAL]) {
+        ok(await api(ctx, 'PUT', '/api/people/profile', profile(slug), device));
+        for (let i = 0; i < 9; i++) ok(await api(ctx, 'GET', `/api/topics?event=${slug}`));
+      }
+      const refused = await api(ctx, 'PUT', '/api/people/profile', profile(DEMO), device);
+      assert.deepEqual([refused.status, refused.json], [503, { error: 'daily_limit' }]);
+      assert.ok(Number(refused.headers.get('retry-after')) > 0, 'until 00:00 UTC');
+      assert.equal((await api(ctx, 'POST', '/api/presence/sightings', { event: DEMO, tokens: [] }, device)).status, 503);
+      const read = await api(ctx, 'GET', `/api/topics?event=${DEMO}`);
+      assert.equal(read.status, 200, 'reads still answer');
+      assert.equal(read.headers.get('x-caddie-pace'), '10', 'at the slowest pace');
+      assert.equal((await api(ctx, 'DELETE', `/api/people/profile?event=${DEMO}`, undefined, device)).status, 200, 'a person\'s own delete is never refused');
+
+      // The same eleven requests on a real conference: no allotment of its own, so it keeps
+      // writing, and its pace is the account-wide one (it has 89 of 100 requests left).
+      ok(await api(ctx, 'PUT', '/api/people/profile', profile(REAL), device));
+      const real = await api(ctx, 'GET', `/api/topics?event=${REAL}`);
+      assert.ok(Number(real.headers.get('x-caddie-pace')) < 10, real.headers.get('x-caddie-pace'));
+    });
+  });
+
+  test('the meter\'s allotment: the rows-written and rows-read shares stop nudges and the lexical index, DEMO_SHARE is read with its default', () => {
+    assert.equal(demoShareOf({}), 0.1);
+    for (const [v, want] of [['0.25', 0.25], ['1', 1], ['0', 0.1], ['-1', 0.1], ['2', 0.1], ['x', 0.1], ['', 0.1]]) assert.equal(demoShareOf({ DEMO_SHARE: v }), want, v);
+    const state = fakeState();
+    const sql = (q, ...b) => state.storage.sql.exec(q, ...b);
+    sql('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)');
+    const env = { DAILY_REQUEST_BUDGET: '1000', ROWS_READ_SOFT_CAP: '1000', ROWS_WRITTEN_SOFT_CAP: '100' };
+    const m = new Meter({ sql, exec: sql, env, now: T0 });
+    m.setShare(0.1);
+    m.addRows(99, 9, T0);
+    assert.deepEqual([m.lexicalAllowed(T0), m.writesAllowed(T0), m.allotmentSpent(T0)], [true, true, false]);
+    m.addRows(1, 1, T0);
+    assert.deepEqual([m.lexicalAllowed(T0), m.writesAllowed(T0), m.allotmentSpent(T0)], [false, false, true], '100 rows read and 10 written: the shares are used up');
+    m.setShare(null);
+    assert.deepEqual([m.lexicalAllowed(T0), m.writesAllowed(T0), m.allotmentSpent(T0)], [true, true, false], 'without a share only the account-wide caps apply');
+    for (const bad of [0, -0.5, 1.5, Number.NaN]) {
+      m.setShare(bad);
+      assert.equal(m.share, null, String(bad));
+    }
   });
 });
 
@@ -440,8 +549,139 @@ describe('the daily refresh', { skip }, () => {
   });
 });
 
+const PUSH_INGEST = fileURLToPath(new URL('../ingest/push-ingest.mjs', import.meta.url));
+const REPO = fileURLToPath(new URL('../..', import.meta.url));
+
+// A loopback HTTP server in front of the Worker of ctx, for push-ingest.mjs run as a child process.
+// before(request), when given, runs first and may answer instead (a Response) or let it through
+// (null). Every request's method and path is recorded.
+async function bridge(ctx, before = null) {
+  const seen = [];
+  const server = http.createServer(async (req, res) => {
+    try {
+      const chunks = [];
+      for await (const c of req) chunks.push(c);
+      const body = Buffer.concat(chunks);
+      const headers = {};
+      for (const k of ['content-type', 'x-caddie-admin', 'cf-access-client-id', 'cf-access-client-secret']) if (req.headers[k]) headers[k] = req.headers[k];
+      const request = new Request(`http://127.0.0.1:${server.address().port}${req.url}`, { method: req.method, headers, body: body.length ? body : undefined });
+      seen.push(`${req.method} ${new URL(request.url).pathname}`);
+      const answer = (before && (await before(request))) || (await quietly(() => worker.fetch(request, ctx.env)));
+      res.writeHead(answer.status, { 'content-type': answer.headers.get('content-type') ?? 'application/json' });
+      res.end(Buffer.from(await answer.arrayBuffer()));
+    } catch {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end('{}');
+    }
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  return { api: `http://127.0.0.1:${server.address().port}`, seen, close: () => new Promise((r) => server.close(r)) };
+}
+
+// push-ingest.mjs --events-from <report> --refresh-only, as the worker job runs it, in a child
+// process with a temporary data folder holding the demo's files for DAY. Its environment is built
+// here: the fixture's fake key, no inherited variable, and GITHUB_ACTIONS for the notices.
+async function runRefresh(api) {
+  const dir = mkdtempSync(join(tmpdir(), 'caddie-demo-push-'));
+  try {
+    const { conference, docs } = buildDemo(ON, DAY);
+    mkdirSync(join(dir, 'data', DEMO), { recursive: true });
+    writeFileSync(join(dir, 'data', DEMO, 'conference.json'), JSON.stringify({ ...conference, raw_fetched_at: `${DAY}T06:00:00.000Z` }));
+    writeFileSync(join(dir, 'data', DEMO, 'talks.ndjson'), `${docs.map((d) => JSON.stringify(d)).join('\n')}\n`);
+    writeFileSync(join(dir, 'report.json'), JSON.stringify({ processed: [DEMO] }));
+    const child = spawn(process.execPath, [PUSH_INGEST, '--api', api, '--events-from', join(dir, 'report.json'), '--refresh-only'], {
+      cwd: REPO,
+      env: { PATH: process.env.PATH, HOME: dir, ADMIN_TOKEN: KEY, CADDIE_DATA_DIR: join(dir, 'data'), GITHUB_ACTIONS: 'true' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    let err = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { err += d; });
+    const code = await new Promise((resolve, reject) => {
+      child.on('error', reject);
+      child.on('close', resolve);
+    });
+    return { code, out, err };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 describe('--refresh-only', { skip }, () => {
   const fetchVia = (ctx) => (url, init) => quietly(() => worker.fetch(new Request(url, init), ctx.env));
+
+  test('a demo hidden between the list check and the write is not written: it is reported as changed and stays hidden', async () => {
+    await withFixedClock(T0, async () => {
+      const ctx = realEnv();
+      await putConferences(ctx, [demoConf(DAY)]);
+      const admin = adminVia(ctx);
+      const { push } = refreshOnly([demoConf(NEXT)], await listedSearchable(BASE, fetchVia(ctx)));
+      assert.equal(push.length, 1, 'listed as searchable when the list was read');
+      await putConferences(ctx, [hiddenDemo()]);
+      const notes = [];
+      assert.deepEqual(await upsertRefreshing(admin, push, { log: () => {}, note: (m) => notes.push(m) }), { upserted: 0, changed: [DEMO], skipped: [] });
+      assert.deepEqual(notes, [`${DEMO}: skipped, it changed on the Worker during this run and is no longer listed as searchable, so nothing of it was pushed.`]);
+      const row = rows(ctx.db('directory:global'), 'SELECT status, doc FROM conferences WHERE slug = ?', DEMO)[0];
+      assert.equal(row.status, 'unavailable');
+      assert.equal(JSON.parse(row.doc).status_reason, 'operator_hidden', 'the hidden document is untouched');
+      assert.equal(ctx.obj(DEMO).conf.status, 'unavailable');
+      assert.ok(!(await listed(ctx)).some((c) => c.slug === DEMO));
+      // Still searchable, it is written, and the stored document never keeps expect_status.
+      await putConferences(ctx, [demoConf(DAY)]);
+      assert.deepEqual(await upsertRefreshing(admin, [demoConf(NEXT)], { log: () => {}, note: () => assert.fail('no notice') }), { upserted: 1, changed: [], skipped: [] });
+      const stored = JSON.parse(rows(ctx.db('directory:global'), 'SELECT doc FROM conferences WHERE slug = ?', DEMO)[0].doc);
+      assert.equal(stored.end_date, '2026-11-14');
+      assert.ok(!('expect_status' in stored));
+    });
+  });
+
+  test('push-ingest main(): never added, a notice and exit 0; listed, the push; hidden during the run, a notice, exit 0 and no talks; an unreadable list, exit 2 and nothing sent', async () => {
+    const ctx = realEnv();
+    // Never added.
+    let b = await bridge(ctx);
+    let r = await runRefresh(b.api).finally(() => b.close());
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.out, new RegExp(`^::notice::${DEMO}: skipped, the Worker does not list it as searchable \\(never added, hidden or removed\\), and --refresh-only never adds or shows a conference; caddie-admin conferences add, unhide or unretire is the operator's step\\.$`, 'm'));
+    assert.match(r.out, /^Nothing to refresh\.$/m);
+    assert.deepEqual(b.seen, ['GET /api/conferences'], 'no admin request');
+    assert.equal(rows(ctx.db('directory:global'), 'SELECT slug FROM conferences').length, 0);
+
+    // Listed as searchable: pushed.
+    await putConferences(ctx, [demoConf(DAY, { end_date: '2026-11-13' })]);
+    b = await bridge(ctx);
+    r = await runRefresh(b.api).finally(() => b.close());
+    assert.equal(r.code, 0, `${r.out}\n${r.err}`);
+    assert.match(r.out, /Events pushed: 1, failed: 0/);
+    assert.equal(rows(ctx.db(`conference:${DEMO}`), 'SELECT COUNT(*) AS n FROM talks')[0].n, buildDemo(ON, DAY).docs.length);
+    assert.equal(b.seen.filter((x) => x === 'PUT /admin/conferences').length, 1);
+
+    // Hidden by the operator while the run goes on: after the list was read, before the write.
+    let hidden = false;
+    b = await bridge(ctx, async (request) => {
+      if (!hidden && request.method === 'PUT' && new URL(request.url).pathname === '/admin/conferences') {
+        hidden = true;
+        await putConferences(ctx, [hiddenDemo()]);
+      }
+      return null;
+    });
+    const talksBefore = rows(ctx.db(`conference:${DEMO}`), 'SELECT talk_id, generation FROM talks ORDER BY talk_id');
+    r = await runRefresh(b.api).finally(() => b.close());
+    assert.equal(r.code, 0, `${r.out}\n${r.err}`);
+    assert.match(r.out, new RegExp(`^::notice::${DEMO}: skipped, it changed on the Worker during this run and is no longer listed as searchable, so nothing of it was pushed\\.$`, 'm'));
+    assert.match(r.out, /Events pushed: 0, failed: 0/);
+    assert.ok(!b.seen.some((x) => x.startsWith('POST /admin/talks')), 'no talk is pushed');
+    assert.deepEqual(rows(ctx.db(`conference:${DEMO}`), 'SELECT talk_id, generation FROM talks ORDER BY talk_id'), talksBefore);
+    assert.equal(ctx.obj(DEMO).conf.status, 'unavailable', 'it stays hidden');
+
+    // The list cannot be read: nothing is sent and the run fails.
+    await putConferences(ctx, [demoConf(DAY)]);
+    b = await bridge(ctx, async (request) => (new URL(request.url).pathname === '/api/conferences' ? new Response('{}', { status: 500 }) : null));
+    r = await runRefresh(b.api).finally(() => b.close());
+    assert.equal(r.code, 2, r.out);
+    assert.match(r.err, /--refresh-only: GET \/api\/conferences could not be read, so nothing was pushed\./);
+    assert.ok(!b.seen.some((x) => x.includes('/admin/')), 'no admin request');
+  });
 
   test('the demo is pushed only while the Worker lists it as searchable: never added, hidden and removed are skipped', async () => {
     await withFixedClock(T0, async () => {
@@ -566,6 +806,88 @@ describe('switching the demo off', { skip }, () => {
     });
   });
 
+  test('a fan-out that arrives after a later one is ignored: the hidden demo stays hidden (doc_seq)', async () => {
+    await withFixedClock(T0, async () => {
+      const ctx = realEnv();
+      await putConferences(ctx, [demoConf(DAY)]);
+      const o = ctx.obj(DEMO);
+      await populatePeople(o, DEMO);
+      // Holds the next fan-out of a document to the demo's object until released.
+      const ns = ctx.env.CONFERENCE;
+      const get = ns.get;
+      let release = null;
+      ns.get = (id) => {
+        const stub = get(id);
+        return {
+          fetch: async (url, init) => {
+            if (!release && new URL(url).pathname === '/internal/conference') await new Promise((r) => { release = r; });
+            return stub.fetch(url, init);
+          },
+        };
+      };
+      const earlier = send(ctx, 'PUT', '/admin/conferences', { conferences: [demoConf(NEXT)] });
+      while (!release) await new Promise((r) => setImmediate(r));
+      ns.get = get;
+      assert.deepEqual(await putConferences(ctx, [hiddenDemo()]), { upserted: 1, searchable: 0, synced: 1, skipped_retired: [] });
+      assert.equal(o.conf.status, 'unavailable');
+      release();
+      assert.deepEqual((await earlier).json, { upserted: 1, searchable: 1, synced: 1, skipped_retired: [] });
+      assert.equal(o.conf.status, 'unavailable', 'the earlier, searchable document arrived last and was ignored');
+      assert.equal(o.conf.end_date, '2026-11-13', 'the hidden document is the one held');
+      for (const t of LIVE) assert.equal(counts(ctx.db(`conference:${DEMO}`))[t], 0, t);
+      assert.ok(!(await listed(ctx)).some((c) => c.slug === DEMO));
+      const dirSeq = rows(ctx.db('directory:global'), 'SELECT doc_seq FROM conferences WHERE slug = ?', DEMO)[0].doc_seq;
+      assert.equal(Number(rows(ctx.db(`conference:${DEMO}`), "SELECT v FROM meta WHERE k = 'doc_seq'")[0].v), dirSeq, 'the object holds the number of the directory\'s last write');
+    });
+  });
+
+  test('the object takes a document only when it is not older than the last one; without a number, as before', async () => {
+    const o = new ConferenceDO(fakeState(), { EMBED_FAKE: '1' });
+    const put = async (doc, docSeq) => {
+      const res = await o.fetch(new Request('https://do.internal/internal/conference', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', 'x-caddie-slug': DEMO },
+        body: JSON.stringify({ doc, route_prefix: 'abcdef', ...(docSeq === undefined ? {} : { doc_seq: docSeq }) }),
+      }));
+      return [res.status, await res.json()];
+    };
+    assert.deepEqual(await put(demoConf(DAY), 5), [200, { ok: true }]);
+    assert.deepEqual(await put(hiddenDemo(), 3), [200, { ok: true }]);
+    assert.equal(o.conf.status, 'searchable', 'number 3 is older than 5: ignored');
+    assert.deepEqual(await put(hiddenDemo(), 5), [200, { ok: true }]);
+    assert.equal(o.conf.status, 'unavailable', 'the same number again is applied');
+    assert.deepEqual(await put(demoConf(DAY)), [200, { ok: true }]);
+    assert.equal(o.conf.status, 'searchable', 'a fan-out without the number is applied');
+    for (const bad of [0, -1, 1.5, '6']) assert.deepEqual(await put(demoConf(DAY), bad), [400, { error: 'doc_seq must be a positive integer' }]);
+  });
+
+  test('a cleanup that fails still leaves no old Store open, and the next hide finishes it', async () => {
+    await withFixedClock(T0, async () => {
+      const ctx = realEnv();
+      await putConferences(ctx, [demoConf(DAY)]);
+      const o = ctx.obj(DEMO);
+      await populatePeople(o, DEMO);
+      const store = o.store;
+      const wipes = o.wipes;
+      const proto = Object.getPrototypeOf(store);
+      const clear = proto.clearLiveActivity;
+      proto.clearLiveActivity = () => {
+        throw new Error('the delete failed');
+      };
+      try {
+        assert.deepEqual(await putConferences(ctx, [hiddenDemo()]), { upserted: 1, searchable: 0, synced: 0, skipped_retired: [] });
+      } finally {
+        proto.clearLiveActivity = clear;
+      }
+      assert.equal(store.closed, true, 'the old Store is closed before the delete runs');
+      assert.notEqual(o.store, store);
+      assert.equal(o.wipes, wipes + 1);
+      assert.ok(counts(ctx.db(`conference:${DEMO}`)).presence > 0, 'the failed delete left the rows');
+      assert.deepEqual(await putConferences(ctx, [hiddenDemo()]), { upserted: 1, searchable: 0, synced: 1, skipped_retired: [] });
+      for (const t of LIVE) assert.equal(counts(ctx.db(`conference:${DEMO}`))[t], 0, `${t} after the repeated hide`);
+    });
+  });
+
   test('a real conference\'s hide keeps all of its data', async () => {
     await withFixedClock(T0, async () => {
       const ctx = realEnv();
@@ -667,6 +989,45 @@ describe('the tier 2 CLI and a demo the Worker does not list', { skip }, () => {
       assert.match(shown.summary, /restored searchable/);
       assert.ok((await listed(ctx)).some((c) => c.slug === DEMO && c.status === 'searchable' && c.demo === true));
       assert.deepEqual(JSON.parse(readFileSync(join(tmp, 'data/conference-operator.json'), 'utf8')).hidden, {});
+    } finally {
+      for (const [k, v] of [['CADDIE_DEMO_CONFIG', saved.config], ['CADDIE_DEMO_TODAY', saved.today]]) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('conferences unretire of the demo from a clone without its data folder sends the generator\'s document, unavailable and operator_removed, on both tiers', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'caddie-demo-unretire-'));
+    const configFile = join(tmp, 'demo-config.json');
+    writeFileSync(configFile, JSON.stringify({ enabled: false }));
+    const saved = { config: process.env.CADDIE_DEMO_CONFIG, today: process.env.CADDIE_DEMO_TODAY };
+    process.env.CADDIE_DEMO_CONFIG = configFile;
+    process.env.CADDIE_DEMO_TODAY = DAY;
+    try {
+      const ctx = realEnv();
+      await putConferences(ctx, [demoConf(DAY)]);
+      const cli = withConferenceFiles(adapterFor(ctx), { root: tmp, tier: 2 });
+      await cli.removeConference({ event: DEMO, slug: DEMO, reason: 'other', mode: 'run', options: {} });
+      assert.deepEqual(rows(ctx.db('directory:global'), 'SELECT slug FROM conferences'), []);
+      const back = await cli.unretireConference({ event: DEMO, slug: DEMO, mode: 'run' });
+      assert.match(back.summary, /sent unavailable \(operator_removed\) \(Worker was not listed\) with unretire: true and expect_status: null/);
+      const row = rows(ctx.db('directory:global'), 'SELECT status, doc FROM conferences WHERE slug = ?', DEMO)[0];
+      const doc = JSON.parse(row.doc);
+      assert.deepEqual([row.status, doc.demo, doc.status_reason, doc.start_date], ['unavailable', true, 'operator_removed', '2026-11-11']);
+      assert.ok(!(await listed(ctx)).some((c) => c.slug === DEMO), 'back, but not listed until a refresh');
+      assert.deepEqual(JSON.parse(readFileSync(join(tmp, 'data/conference-operator.json'), 'utf8')).removed, {});
+      // A repeat (the repair after a lost answer) expects the hidden row, not no row.
+      const again = await cli.unretireConference({ event: DEMO, slug: DEMO, mode: 'run' });
+      assert.match(again.summary, /expect_status: "unavailable"/);
+
+      // Tier 3: the same document reaches the adapter, which ignores it.
+      writeFileSync(join(tmp, 'data/conference-operator.json'), JSON.stringify({ hidden: {}, removed: { [DEMO]: { since: '2026-11-12T00:00:00Z' } } }));
+      let seen = null;
+      const tier3 = withConferenceFiles({ unretireConference: async (args) => { seen = args; return { backend: 'none', summary: 'nothing to do on tier 3' }; } }, { root: tmp, tier: 3 });
+      await tier3.unretireConference({ event: DEMO, slug: DEMO, mode: 'run' });
+      assert.deepEqual([seen.doc.slug, seen.doc.demo, seen.doc.status, seen.doc.status_reason], [DEMO, true, 'unavailable', 'operator_removed']);
     } finally {
       for (const [k, v] of [['CADDIE_DEMO_CONFIG', saved.config], ['CADDIE_DEMO_TODAY', saved.today]]) {
         if (v === undefined) delete process.env[k];

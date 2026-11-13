@@ -68,6 +68,12 @@ VAPID_SUBJECT = "https://github.com/KurtLehnardt/conferenceCaddie"
 DAILY_REQUEST_BUDGET = "70000"
 ROWS_READ_SOFT_CAP = "3500000"
 ROWS_WRITTEN_SOFT_CAP = "85000"
+# The demo conference's own allotment (src/lib/meter.js setShare): the share of each of the three
+# budgets above that its own usage may take, a number above 0 and at most 1 (0.1 when unset or
+# invalid). Its pace follows that allotment, and once it has used its requests or written rows
+# its public writes answer 503 daily_limit until 00:00 UTC. It applies only to a conference whose
+# document has demo: true (docs/ADMIN_CLI.md, "The demo conference").
+DEMO_SHARE = "0.1"
 
 [observability]
 enabled = true
