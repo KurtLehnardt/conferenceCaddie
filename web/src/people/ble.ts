@@ -36,6 +36,14 @@ export function nearbyTitle(slug: string): string {
   return demoTitle(NEARBY_TITLE, isDemoSlug(slug));
 }
 
+/**
+ * What the companion app's service is started with: the token, scanning on, presence's time left,
+ * and whether [slug] is a demo conference, so its ongoing notification says so.
+ */
+export function startOptions(slug: string, token: string): { token: string; scan: boolean; durationMs: number; demo: boolean } {
+  return { token, scan: true, durationMs: presenceDuration(slug), demo: isDemoSlug(slug) };
+}
+
 /** The notification body for a conference: [nearbyText], after "Demo: " for a demo conference. */
 export function nearbyBody(slug: string, evidence: string): string {
   return demoBody(nearbyText(evidence), isDemoSlug(slug));
@@ -64,7 +72,8 @@ interface CaddieBlePlugin {
   isAvailable(): Promise<{ available: boolean; enabled: boolean; extended: boolean; rationale: Record<string, string> }>;
   checkPermissions(): Promise<PermissionReport>;
   requestPermissions(): Promise<PermissionReport>;
-  start(options: { token: string; scan: boolean; durationMs: number }): Promise<void>;
+  /** [demo] makes the ongoing notification say it is a demo conference's, as every notification about one does. */
+  start(options: { token: string; scan: boolean; durationMs: number; demo: boolean }): Promise<void>;
   rotate(options: { token: string; durationMs?: number }): Promise<void>;
   stop(): Promise<void>;
   isRunning(): Promise<{ running: boolean }>;
@@ -412,7 +421,7 @@ export async function startBle(slug: string): Promise<string | null> {
   if (!res) return 'Turn on being around first.';
   if (!res.ble?.token) return 'That could not be started. Please try again.';
   try {
-    await CaddieBle.start({ token: res.ble.token, scan: true, durationMs: presenceDuration(slug) });
+    await CaddieBle.start(startOptions(slug, res.ble.token));
   } catch (err) {
     void clearOnServer(slug);
     return describe(err);

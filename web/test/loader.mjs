@@ -2,7 +2,8 @@
 // - a relative import without an extension (Vite's style) resolves to the .ts file next to it, or
 //   to the .tsx file when there is no .ts one;
 // - a .tsx file is compiled with the JSX transform the build uses (Preact's automatic runtime,
-//   through Vite's own compiler, rolldown), so the render tests can draw the screens (dom.mjs);
+//   through Vite's own compiler, rolldown, a devDependency pinned to the version Vite resolves),
+//   so the render tests can draw the screens (dom.mjs);
 // - a stylesheet import (`import './people.css'`) loads as an empty module;
 // - import.meta.env, which Vite fills in at build time, is set to a production-like value;
 // - a module imported with a query, such as `sync.ts?tab=b`, passes the query on to the modules

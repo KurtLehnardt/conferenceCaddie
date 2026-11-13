@@ -59,7 +59,7 @@ test('a notification of a demo conference is titled "Conference Caddie (Demo)" a
   assert.equal(demoTitle('Conference Caddie', true), 'Conference Caddie (Demo)');
   assert.equal(demoTitle('Conference Caddie', false), 'Conference Caddie');
   assert.equal(demoTitle('Conference Caddie', true), demoName('Conference Caddie', true), 'one rule for names and titles');
-  assert.equal(demoBody('Someone is near you', true), 'Demo: Someone is near you');
+  assert.equal(demoBody('Someone is near you', true), 'Demo: someone is near you', 'lower case after the prefix, as the server writes it');
   assert.equal(demoBody('Someone is near you', false), 'Someone is near you');
 });
 
@@ -74,11 +74,29 @@ test('the Bluetooth nudge of a demo conference follows the notification rule', a
   try {
     assert.equal(NEARBY_TITLE, 'Conference Caddie');
     assert.equal(nearbyTitle('demo-2099'), 'Conference Caddie (Demo)');
-    assert.equal(nearbyBody('demo-2099', 'eBPF'), `Demo: ${nearbyText('eBPF')}`);
+    assert.equal(nearbyBody('demo-2099', 'eBPF'), "Demo: someone who's worked on eBPF is right near you");
     assert.equal(nearbyTitle('real-2099'), 'Conference Caddie');
     assert.equal(nearbyBody('real-2099', 'eBPF'), nearbyText('eBPF'));
     assert.equal(nearbyTitle('odd-2099'), 'Conference Caddie');
     assert.equal(nearbyTitle('unknown-2099'), 'Conference Caddie');
+  } finally {
+    localStorage.clear();
+  }
+});
+
+test("the companion app's service is told when it runs for a demo conference", async () => {
+  const { startOptions } = await import('../src/people/ble.ts?demo-start');
+  storeConferences([
+    { ...REAL, slug: 'real-2099' },
+    { ...DEMO, slug: 'demo-2099' },
+  ]);
+  try {
+    const demo = startOptions('demo-2099', 'dG9rZW4');
+    assert.equal(demo.demo, true);
+    assert.equal(demo.token, 'dG9rZW4');
+    assert.equal(demo.scan, true);
+    assert.equal(startOptions('real-2099', 'dG9rZW4').demo, false);
+    assert.equal(startOptions('unknown-2099', 'dG9rZW4').demo, false);
   } finally {
     localStorage.clear();
   }
@@ -136,7 +154,7 @@ test('the pill and the note show for a demo conference and for nothing else', ()
   assert.equal(demoPillFor({ ...REAL, demo: 'true' }), null);
   assert.equal(demoPillFor(null), null);
   assert.equal(DemoPill({ demo: true }).props.class, 'demo-pill');
-  assert.equal(DemoPill({}).props.class, 'demo-pill');
+  assert.equal(DemoPill({}), null, 'no pill unless asked for');
   assert.equal(DemoPill({ demo: false }), null);
 
   const note = demoNoteFor(DEMO);

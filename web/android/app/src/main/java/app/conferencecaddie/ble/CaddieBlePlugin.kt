@@ -25,7 +25,7 @@ import com.getcapacitor.annotation.PermissionCallback
 /**
  * The CaddieBle Capacitor plugin: the JS side of "Find people near me by Bluetooth".
  *
- * Methods: isAvailable, checkPermissions, requestPermissions, start({ token, scan, durationMs }),
+ * Methods: isAvailable, checkPermissions, requestPermissions, start({ token, scan, durationMs, demo }),
  * rotate({ token, durationMs? }), stop(), isRunning(), notify({ title, body, data? }).
  * Events: "sightings" { sightings: [{ token, rssi }] } at most every 10 s, "stopped" { reason }
  * when the service ends for any reason, and "notificationTap" { data } when a nearby notification
@@ -176,6 +176,8 @@ class CaddieBlePlugin : Plugin() {
             return
         }
         val scan = call.getBoolean("scan", true) ?: true
+        // A demo conference's service says so in its ongoing notification.
+        val demo = call.getBoolean("demo", false) ?: false
         if (!allGranted()) {
             call.reject("Bluetooth permissions are missing", "permission_denied")
             return
@@ -194,7 +196,7 @@ class CaddieBlePlugin : Plugin() {
             return
         }
         try {
-            BleService.start(context, token, scan, duration)
+            BleService.start(context, token, scan, duration, demo)
         } catch (e: Exception) {
             call.reject("Could not start the Bluetooth service", "start_failed")
             return

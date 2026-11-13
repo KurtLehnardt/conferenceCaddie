@@ -86,6 +86,7 @@ class BleService : Service() {
         const val EXTRA_TOKEN = "token"
         const val EXTRA_SCAN = "scan"
         const val EXTRA_DURATION_MS = "duration_ms"
+        const val EXTRA_DEMO = "demo"
 
         /** Set by the plugin while it is loaded; called on the main thread. */
         @Volatile
@@ -95,11 +96,12 @@ class BleService : Service() {
         var running: Boolean = false
             private set
 
-        fun start(context: Context, token: ByteArray, scan: Boolean, durationMs: Long) {
+        fun start(context: Context, token: ByteArray, scan: Boolean, durationMs: Long, demo: Boolean = false) {
             val intent = Intent(context, BleService::class.java).setAction(ACTION_START)
                 .putExtra(EXTRA_TOKEN, token)
                 .putExtra(EXTRA_SCAN, scan)
                 .putExtra(EXTRA_DURATION_MS, durationMs)
+                .putExtra(EXTRA_DEMO, demo)
             ContextCompat.startForegroundService(context, intent)
         }
 
@@ -160,6 +162,9 @@ class BleService : Service() {
     private var scanner: BluetoothLeScanner? = null
     private var scanning = false
     private var stopReason: String? = null
+
+    /** True while running for a demo conference, whose ongoing notification says so. */
+    private var demo = false
 
     /** token -> strongest RSSI heard in the current window. */
     private val window = HashMap<String, Int>()
@@ -252,6 +257,9 @@ class BleService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // A start says whether this is a demo conference's, before the notification goes up; a
+        // rotate keeps what the start said.
+        if (intent?.action == ACTION_START) demo = intent.getBooleanExtra(EXTRA_DEMO, false)
         // Every path through here is a foreground start, so startForeground always comes first.
         startInForeground()
         if (intent == null) {
@@ -377,6 +385,17 @@ class BleService : Service() {
         }
     }
 
+    /**
+     * The ongoing notification's title and text. A demo conference's is titled "Conference Caddie
+     * (Demo)" and its text starts with "Demo: " and the usual title, as every notification about a
+     * demo conference is (the native apps' Demo.notification).
+     */
+    private fun notificationWords(): Pair<String, String> {
+        val title = getString(R.string.ble_foreground_title)
+        val text = getString(R.string.ble_foreground_text)
+        return if (demo) getString(R.string.ble_foreground_title_demo) to getString(R.string.ble_foreground_text_demo, title, text) else title to text
+    }
+
     private fun buildNotification(): Notification {
         val stopIntent = Intent(this, BleService::class.java).setAction(ACTION_STOP)
         val stopPending = PendingIntent.getForegroundService(
@@ -389,11 +408,12 @@ class BleService : Service() {
         val openPending = openIntent?.let {
             PendingIntent.getActivity(this, 2, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         }
+        val (title, text) = notificationWords()
         return NotificationCompat.Builder(this, BleConstants.CHANNEL_PRESENCE)
             .setSmallIcon(R.drawable.ic_stat_caddie)
-            .setContentTitle(getString(R.string.ble_foreground_title))
-            .setContentText(getString(R.string.ble_foreground_text))
-            .setStyle(NotificationCompat.BigTextStyle().bigText(getString(R.string.ble_foreground_text)))
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setOngoing(true)
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)

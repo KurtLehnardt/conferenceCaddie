@@ -12,6 +12,9 @@
     <string name="ble_channel_nearby_desc">A strong match is within a few metres.</string>
     <string name="ble_foreground_title">Conference Caddie is finding people near you</string>
     <string name="ble_foreground_text">Your phone broadcasts a random code and listens for others. Nothing about you is sent over Bluetooth.</string>
+    <!-- The same notification at a demo conference: every notification about one is titled so and its text starts with "Demo: ". -->
+    <string name="ble_foreground_title_demo">Conference Caddie (Demo)</string>
+    <string name="ble_foreground_text_demo">Demo: %1$s. %2$s</string>
     <string name="ble_stop">Stop</string>
 
     <!-- Permission rationale, returned to the web app so it can explain before asking. -->

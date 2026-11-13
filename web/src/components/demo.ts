@@ -12,9 +12,6 @@
 // (docs/contracts/talk-bundle.md): its title is "Conference Caddie (Demo)" and its body starts with
 // "Demo: ". The pill looks like the people screens' "Sample" pill (.pp-sample), and the native apps
 // draw the same pill with the same words.
-//
-// This file has no JSX on purpose: the tests run under node --test, which cannot load .tsx files,
-// so the elements are built with h() here and the tests check the elements themselves.
 import { h } from 'preact';
 
 /** The pill's visible text. The style shows it in capitals, as "DEMO". */
@@ -51,9 +48,13 @@ export function demoTitle(title: string, demo: boolean): string {
   return demoName(title, demo);
 }
 
-/** The body of a notification about a conference: "Demo: " and [body] for a demo conference, [body] otherwise. */
+/**
+ * The body of a notification about a conference: for a demo conference "Demo: " and [body] with its
+ * first letter in lower case, as the server writes it ("Demo: someone who's worked on…"); [body]
+ * otherwise (Demo.notificationBody on the native apps).
+ */
 export function demoBody(body: string, demo: boolean): string {
-  return demo ? DEMO_BODY_PREFIX + body : body;
+  return demo ? DEMO_BODY_PREFIX + body.charAt(0).toLowerCase() + body.slice(1) : body;
 }
 
 /** The screen-reader words a heading of demo data ends with, inside the heading: nothing for a real conference. */
@@ -82,8 +83,8 @@ export function demoNoteFor(conference: { demo?: unknown } | null | undefined) {
   return h('p', { class: 'demo-note' }, demoPill(), h('span', { class: 'demo-note-text' }, DEMO_NOTE));
 }
 
-/** The pill when [demo] is true. */
-export function DemoPill({ demo = true }: { demo?: boolean }) {
+/** The pill when [demo] is true; nothing otherwise. */
+export function DemoPill({ demo = false }: { demo?: boolean }) {
   return demo ? demoPill() : null;
 }
 

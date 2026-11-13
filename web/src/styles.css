@@ -1914,6 +1914,15 @@ mark {
   margin: 0;
 }
 
+/* Settings' people groups of a demo conference open with the note, spaced as the groups are. */
+.settings > .demo-note {
+  margin: 24px 0 0;
+}
+
+.settings > .demo-note + .settings-group {
+  margin-top: 24px;
+}
+
 /* The row above a talk card's title, and the pill after a page title or a conference name. */
 .card-demo {
   margin: 0 0 6px;
