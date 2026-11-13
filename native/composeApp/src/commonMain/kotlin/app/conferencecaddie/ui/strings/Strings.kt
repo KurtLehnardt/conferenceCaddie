@@ -456,6 +456,13 @@ object Strings {
             "Schedule data comes from each conference's Sessionize feed, discovered through events.linuxfoundation.org."
         const val SOURCE_CODE = "Source code"
         const val SOURCE_URL = "https://github.com/KurtLehnardt/conferenceCaddie"
+        const val PRIVACY_POLICY = "Privacy policy"
+        /**
+         * The apps' privacy policy, published by the Pages workflow from scripts/lib/privacy-page.mjs
+         * (scripts/test/pages-privacy.test.mjs checks that this address is that page). A fork that
+         * publishes its own build changes it (docs/fork/APPS.md, "The privacy policy").
+         */
+        const val PRIVACY_URL = "https://kurtlehnardt.github.io/conferenceCaddie/privacy.html"
         const val VERSION = "Version"
 
         // Native only.

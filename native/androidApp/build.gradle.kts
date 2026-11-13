@@ -51,9 +51,12 @@ fun bleEnabledFor(buildType: String?): Boolean = buildType == "debug" || (buildT
 // An Android App Bundle (bundleRelease, for Google Play) carries every ABI, and Play serves each
 // device only its own. AGP refuses to build a bundle while the APK ABI splits below are on
 // (https://issuetracker.google.com/402800800), so they are off in a build that asks for a bundle
-// task. Build the APKs and the bundle in separate Gradle runs: in one run together the APKs would
-// not be split.
-val buildsBundle = gradle.startParameter.taskNames.any { it.substringAfterLast(':').startsWith("bundle") }
+// task of this project (`bundleRelease`, or `:androidApp:bundleRelease`; a bundle task of another
+// project leaves them on). Build the APKs and the bundle in separate Gradle runs: in one run
+// together the APKs would not be split.
+val buildsBundle = gradle.startParameter.taskNames.any { name ->
+    name.startsWith("bundle") || name.removePrefix(":").startsWith("${project.name}:bundle")
+}
 
 // CI sets CADDIE_VERSION_CODE to 1000 + the workflow run number, which keeps every native build
 // above the Capacitor app's versionCode. Local builds use 1.

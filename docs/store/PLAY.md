@@ -9,7 +9,8 @@ Addresses used below:
 | Privacy policy | `https://kurtlehnardt.github.io/conferenceCaddie/privacy.html` |
 | Account and data deletion | `https://kurtlehnardt.github.io/conferenceCaddie/privacy.html#delete` |
 | Website | `https://kurtlehnardt.github.io/conferenceCaddie/` |
-| Support email | `<your support email>`: Play requires one and shows it publicly. Use an address you are willing to publish. |
+| Support email | `<your support email>`: Play requires one and shows it publicly. Use an address you are willing to publish, and set it as the repository variable `CADDIE_PRIVACY_EMAIL` too, so that the privacy page names it as a contact (the Pages workflow reads it; without it the page names only the repository's public issues). |
+| Developer name | The privacy policy says "we" is the maintainer of KurtLehnardt/conferenceCaddie, publishing under the developer name shown in Play. Nothing to change unless the developer account belongs to someone else. |
 | The bundle to upload | The artifact `conference-caddie-native-<commit>-release.aab` of a `Native apps` run on `main` (see [Internal testing](#internal-testing)) |
 
 A fork uses its own application id, Pages address and repository; see `docs/fork/APPS.md`, "Google Play".
@@ -37,7 +38,7 @@ Conference Caddie helps you make the most of Linux Foundation conferences such a
 
 TALKS, ON YOUR PHONE
 • Pick a conference and the app downloads its whole schedule once. After that, talk search works offline.
-• Search by meaning, not only by keywords: "debugging slow cluster networking" finds the talks about it even when they use other words. The search model runs on your phone, and your searches are never sent anywhere.
+• Search by meaning, not only by keywords: "debugging slow cluster networking" finds the talks about it even when they use other words. The search model runs on your phone, and your search words never leave it.
 • Narrow the results by day, track and level, ask for "day 2 after lunch", or see what is happening now.
 • Open a talk to read its abstract, see its speakers and jump to related talks.
 • For you suggests talks from the topics you want to learn and the talks you mark as Interested.
@@ -46,7 +47,7 @@ TALKS, ON YOUR PHONE
 PEOPLE, IF YOU WANT
 • Make a profile with a display name and, if you like, what you want to learn and what you could talk about. There is no account, and no email address or phone number is needed.
 • See the other attendees who are also visible at the conference, matched to you by what you want to learn and what they know.
-• Say which room or area you are in so that people nearby can find you. If you add your position, others only ever see a rough band such as "near", never where you are.
+• Say which room or area you are in so that people nearby can find you. If you add your position, others see only a rough band such as "near", never your coordinates; someone you agree to meet sees how far away you are and in which direction.
 • Ask someone to talk shop with a short note and a meeting point. Once you both agree, and if you both share your position, each of you sees how far away the other is and in which direction.
 • Report or block anyone. Your profile is deleted when the conference ends, and "Delete my profile" removes it at once.
 
@@ -140,7 +141,7 @@ App content, Target audience:
 
 App content, Data safety. These answers describe the release build on its default server, the tier 3 server named in the privacy policy (`Defaults.BACKEND`). Under Play's definitions:
 
-- **Collected** means sent off the phone; data processed only on the phone is not collected. Talk search, For you, marked talks, the schedule and the learn topics never leave the phone.
+- **Collected** means sent off the phone; data processed only on the phone is not collected. Talk search, For you and the learn topics and text run on the phone and never leave it. The ids of the talks on screen (an opened talk, talk search results, For you suggestions, the marked talks) go to the server for the circle counts without an identifier, and the marked talks go with every people search, with the profile identifier; both are ephemeral.
 - **Shared** means given to a third party. Neither our service providers (Google Cloud, Elastic Cloud, GitHub) nor other attendees seeing what a person chose to make visible count as sharing, so nothing is shared.
 - **Ephemeral** means held only in memory to answer the request. A schedule file, a people search and a talk's circle count are ephemeral; profiles, presence and positions are stored, if only for minutes to days.
 
@@ -163,7 +164,7 @@ For every type marked collected: **not shared**; purposes **App functionality**,
 | Category | Data type | Collected | Ephemeral | Required or optional | Purposes | What and why |
 |---|---|---|---|---|---|---|
 | Location | Approximate location | No | | | | With only approximate permission the app sends no position. |
-| Location | Precise location | **Yes** | No | Optional | App functionality | Only after "Use my position", with precise permission, while the app is open: latitude and longitude with accuracy, rounded to about 1 m and stored with its ~100 m cell until presence ends (60 minutes or the end of the conference day). The cell is still finer than Play's 3 km² threshold for approximate location, so it counts as precise. Never shown to others. |
+| Location | Precise location | **Yes** | No | Optional | App functionality | Only after "Use my position", with precise permission, while the app is open: latitude and longitude with accuracy, rounded to about 1 m and stored with its ~100 m cell until presence ends (60 minutes or the end of the conference day). The cell is still finer than Play's 3 km² threshold for approximate location, so it counts as precise. Never shown to others as coordinates: others see a band derived from the cell, and a meeting partner sees a distance in 10 m steps and a direction. |
 | Personal info | Name | **Yes** | No | Optional | App functionality | The profile's display name (any name the person chooses), kept until the conference ends. |
 | Personal info | Email address | No | | | | |
 | Personal info | User IDs | **Yes** | No | Optional | App functionality; Fraud prevention, security, and compliance | The random profile identifier made on the phone for each server, and a hash of its secret. Reports and blocks store these identifiers. |
@@ -176,11 +177,11 @@ For every type marked collected: **not shared**; purposes **App functionality**,
 | Files and docs | Files and docs | **Yes** | **Yes** | Optional | App functionality | Import my schedule sends the text of a calendar or spreadsheet export the person picks; the server matches it to talks and keeps nothing. |
 | Calendar | Calendar events | No | | | | The app never reads the phone's calendars; an imported export is a file the person picks (above). |
 | Contacts | | No | | | | |
-| App activity | App interactions | **Yes** | **Yes** | Required | App functionality | Opening a talk asks the server how many people share it (conference and talk id, no identifier); nothing is kept. |
-| App activity | In-app search history | **Yes** | **Yes** | Optional | App functionality | A people search sends its text (up to 300 characters) with the profile's identifier; it is used for that request only. Talk search never leaves the phone. |
+| App activity | App interactions | **Yes** | **Yes** | Required | App functionality | Circle counts: the ids of the talks on screen (an opened talk, talk search results, For you suggestions, the marked talks), up to 100 per request, with the conference and no identifier, whether or not the person has a profile. People searches and lists: the marked talks (up to 100) with the profile identifier. The server uses them for the answer and keeps nothing. |
+| App activity | In-app search history | **Yes** | **Yes** | Optional | App functionality | A people search sends its words (up to 300 characters) with the profile's identifier; they are used for that answer only. Talk search never leaves the phone. |
 | App activity | Installed apps | No | | | | |
 | App activity | Other user-generated content | **Yes** | No | Optional | App functionality | The profile's free text (about, interests, expertise, topics to learn and speak about), the talks the person shares the profile for, and the presence's room or area and spot line; kept until the conference ends (presence for its 60 minutes or day). |
-| App activity | Other actions | No | | | | |
+| App activity | Other actions | **Yes** | No | Optional | App functionality; Fraud prevention, security, and compliance | Blocks (kept until the conference ends), reports (kept until the maintainer has reviewed them, at the latest the cleanup after the conference), and asking, accepting and declining a request to talk shop (minutes; a declined request up to two days without its text). |
 | Web browsing | | No | | | | |
 | App info and performance | Crash logs, diagnostics, other performance data | No | | | | No crash reporting or analytics SDK; ONNX Runtime's telemetry is removed and switched off. |
 | Device or other IDs | | No | | | | No advertising ID, Android ID, hardware identifier or push token. The only identifier is the random profile identifier, declared as User IDs. |
@@ -188,7 +189,7 @@ For every type marked collected: **not shared**; purposes **App functionality**,
 
 Notes for the reviewer of these answers:
 
-- Server request logs (Google Cloud Run) record IP addresses and user agents for 30 days, and the rate limiter holds IP addresses in memory for up to about an hour. Play's form has no data type for IP addresses used only for operating the service; the privacy policy discloses them.
+- Server request logs (Google Cloud Run) record IP addresses and user agents for 30 days, and the rate limiter counts recent requests per IP address in memory, dropping an address a few minutes after its last request. Play's form has no data type for IP addresses used only for operating the service; the privacy policy discloses them.
 - Reports keep the two random identifiers until the maintainer reviews them; they are covered by User IDs.
 
 ### Security practices
@@ -237,9 +238,9 @@ Hardware: `android.hardware.location` is declared not required, so phones withou
    gh run download "$run" --repo KurtLehnardt/conferenceCaddie --pattern 'conference-caddie-native-*-release.aab'
    ```
 
-   The sign job's summary names the certificate the bundle was signed with; it must be the upload key, `ANDROID_RELEASE_CERT_SHA256`.
+   Either way the `.aab` arrives inside a zip (from the web page) or a directory named after the artifact (from `gh`); upload the `.aab` file inside it. The sign job's summary names the certificate the bundle was signed with; it must be the upload key, `ANDROID_RELEASE_CERT_SHA256`.
 5. **Create the tester list.** Testing, Internal testing, Testers: create an email list and add the Google account email addresses of up to 100 testers. Save.
-6. **Create the release.** Internal testing, Create new release. When Play asks about app signing, choose **"Let Google create and manage my app signing key"** (see `docs/fork/APPS.md`, "Play App Signing"). Upload the `.aab`. Play names the release after its version code (1000 plus the workflow run number) and version name 0.4.0; add short release notes, then Next, Save, and **Start rollout to Internal testing**.
+6. **Create the release.** Internal testing, Create new release. When Play asks about app signing, choose the Google-generated key (Play Console labels it "Use Google-generated key" or "Let Google create and manage my app signing key"; see `docs/fork/APPS.md`, "Play App Signing"). Upload the `.aab`. Play names the release after its version code (1000 plus the workflow run number) and version name 0.4.0; add short release notes, then Next, Save, and **Start rollout to Internal testing**.
 7. **Share the opt-in link.** Internal testing, Testers, "How testers join your test": copy the link and send it to the testers. Each tester opens it on the Android phone signed in with a listed Google account, accepts the invitation, and installs Conference Caddie from the Play Store link on that page. Internal releases are usually available within minutes.
 8. **Testers who sideloaded the GitHub APK must uninstall it first.** The Play build is signed with Google's app signing key and the GitHub APK with `release.jks`, so neither installs over the other. Uninstalling deletes the app's data on the phone; delete any profile in the app first.
 9. **Every new build:** upload the bundle of a newer `main` run (its version code is higher) as a new release on the same track.
@@ -247,5 +248,7 @@ Hardware: `android.hardware.location` is declared not required, so phones withou
 After the first upload, Setup, App signing shows the app signing key's certificate. Keep its SHA-256 fingerprint with the upload key's; nothing in the app needs it today.
 
 ## Before production
+
+The apps link to the privacy policy from Settings, About, "Privacy policy" (`Strings.Settings.PRIVACY_URL`), as Play's User Data policy asks; the first build that has the link is the one built from this change onwards.
 
 New personal developer accounts must run a **closed test with at least 12 testers who stay opted in for at least 14 consecutive days** before Play lets them apply for production access. Internal testing does not count. Plan a closed testing track (Testing, Closed testing) with 12 or more testers, keep them opted in for 14 days, then apply for production under Dashboard, and answer Play's questions about the test. Organisation accounts are exempt.

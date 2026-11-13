@@ -14,6 +14,7 @@
 // Usage: node scripts/pages-landing.mjs --out dist-pages [--app-url https://conference-caddie.<subdomain>.workers.dev]
 //                                       [--site-url <the Pages site's https address>]
 //                                       [--repo-url https://github.com/<owner>/<repository>]
+//                                       [--contact-email <address>]
 //   --app-url (or the environment variable CADDIE_APP_URL) must be an https URL with no user name,
 //   password, query or fragment; only its origin and path are used. An empty value means "not live".
 //   --site-url is the Pages site's own address (default: the environment variable CADDIE_SITE_URL,
@@ -21,12 +22,12 @@
 //   which GitHub serves at any missing path. Both variables are read when they are needed, not when
 //   the module is imported, as build-bundles.mjs reads its environment.
 //   --repo-url is the repository on GitHub whose issues the privacy page names as the contact
-//   (default: the official repository).
+//   (default: the official repository). --contact-email, when not empty, is named as a contact too.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { OFFICIAL_REPO_URL, normaliseRepoUrl, privacyPage } from './lib/privacy-page.mjs';
+import { OFFICIAL_REPO_URL, normaliseEmail, normaliseRepoUrl, privacyPage } from './lib/privacy-page.mjs';
 
 const KUBECON = 'kubecon-cloudnativecon-north-america-2026';
 const OFFICIAL_SITE_URL = 'https://kurtlehnardt.github.io/conferenceCaddie/';
@@ -85,7 +86,7 @@ export function landingPage(appUrl, siteUrl = defaultSiteUrl()) {
       <p>Find the people to talk to and the talks you would like at Linux Foundation conferences.</p>
     ${body}
       <p class="small">This site publishes only the public talk data: <a href="${files}conferences.json">conferences.json</a>, <a href="${files}capabilities.json">capabilities.json</a> and the talk bundles under <code>bundles/</code>. Source: <a href="https://github.com/KurtLehnardt/conferenceCaddie">KurtLehnardt/conferenceCaddie</a>.</p>
-      <p class="small"><a href="${files}privacy.html">Privacy policy</a></p>
+      <p class="small"><a href="${files}privacy.html">Privacy policy of the Android and iOS apps</a></p>
     </main>
   </body>
 </html>
@@ -93,13 +94,14 @@ export function landingPage(appUrl, siteUrl = defaultSiteUrl()) {
 }
 
 export function parseArgs(argv) {
-  const out = { out: null, appUrl: process.env.CADDIE_APP_URL ?? '', siteUrl: defaultSiteUrl(), repoUrl: OFFICIAL_REPO_URL };
+  const out = { out: null, appUrl: process.env.CADDIE_APP_URL ?? '', siteUrl: defaultSiteUrl(), repoUrl: OFFICIAL_REPO_URL, contactEmail: '' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--out') out.out = argv[++i];
     else if (a === '--app-url') out.appUrl = argv[++i] ?? '';
     else if (a === '--site-url') out.siteUrl = argv[++i] ?? '';
     else if (a === '--repo-url') out.repoUrl = argv[++i] ?? '';
+    else if (a === '--contact-email') out.contactEmail = argv[++i] ?? '';
     else throw new Error(`Unknown argument: ${a}`);
   }
   if (!out.out) throw new Error('--out <dir> is required.');
@@ -115,7 +117,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     const html = landingPage(appUrl, args.siteUrl);
     const site = normaliseAppUrl(args.siteUrl);
     if (!site) throw new Error('The site URL must not be empty.');
-    const privacy = privacyPage(`${site}/`, normaliseRepoUrl(args.repoUrl));
+    const privacy = privacyPage(`${site}/`, normaliseRepoUrl(args.repoUrl), normaliseEmail(args.contactEmail));
     writeFileSync(join(dir, 'index.html'), html);
     writeFileSync(join(dir, '404.html'), html);
     writeFileSync(join(dir, 'privacy.html'), privacy);

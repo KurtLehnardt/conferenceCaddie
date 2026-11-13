@@ -43,6 +43,8 @@ name: Deploy the talk bundles to GitHub Pages
 # not secrets:
 #   CADDIE_APP_URL   the app's address, the Worker's https address. The landing page links to it, or
 #                    says the app is not live yet while it is empty.
+#   CADDIE_PRIVACY_EMAIL  optional: an email address the privacy page names as a contact besides
+#                    the repository's issues (the store listings' support address fits). Empty: issues only.
 # Optional overrides of the addresses the build publishes under (the first step of the build job
 # works them out from the repository this runs in, so a fork needs none of them):
 #   CADDIE_SITE_URL      the Pages site, https, ending in "/". Default: https://<owner, lowercased>.github.io/<repository>/
@@ -301,11 +303,13 @@ jobs:
 
       # The landing page reads CADDIE_APP_URL from the environment; an empty value gives the
       # "not live yet" page, and a value that is not a plain https address fails the build. The
-      # privacy page names this repository's issues as its contact.
+      # privacy page names this repository's issues as its contact, and CADDIE_PRIVACY_EMAIL when it
+      # is set (a value that is not a plain email address fails the build).
       - name: Write the landing page and the privacy policy
         env:
           REPOSITORY: ${{ github.repository }}
-        run: node scripts/pages-landing.mjs --out dist-pages --site-url "$SITE_URL" --repo-url "https://github.com/$REPOSITORY"
+          PRIVACY_EMAIL: ${{ vars.CADDIE_PRIVACY_EMAIL }}
+        run: node scripts/pages-landing.mjs --out dist-pages --site-url "$SITE_URL" --repo-url "https://github.com/$REPOSITORY" --contact-email "$PRIVACY_EMAIL"
 
       # Only the bundle builder's outputs, the landing page and the privacy page may be published: no
       # app code. The github.io origin is shared with other Pages sites of the same account, so a

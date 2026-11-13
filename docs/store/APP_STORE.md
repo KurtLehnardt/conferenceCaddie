@@ -79,4 +79,4 @@ Use the same six screens as for Google Play ([PLAY.md](PLAY.md), "Store listing"
 ## Before submitting
 
 - The Release `Info.plist` still contains `NSBluetoothAlwaysUsageDescription` although Bluetooth is off in Release builds. App Review may ask about it; the review note above answers it, and removing the key from Release builds (as the background modes already are) avoids the question.
-- Check the privacy policy URL answers 200, and that it still matches the build (`scripts/lib/privacy-page.mjs`).
+- Check the privacy policy URL answers 200, and that it still matches the build (`scripts/lib/privacy-page.mjs`). The app links to it from Settings, About, "Privacy policy", as guideline 5.1.1(i) asks.
