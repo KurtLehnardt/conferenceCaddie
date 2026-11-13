@@ -81,7 +81,7 @@ function auditLines() {
 
 // Runs main() with the real adapter factory against the served cluster. `spawn` records child
 // processes instead of starting them.
-async function invoke(argv, { spawnResult, env = {} } = {}) {
+async function invoke(argv, { spawnResult, env = {}, sleep = async () => {} } = {}) {
   const spawned = [];
   const spawn = (file, args, options) => {
     spawned.push({ file, args, options });
@@ -99,6 +99,7 @@ async function invoke(argv, { spawnResult, env = {} } = {}) {
     now: () => new Date('2026-11-11T10:00:00Z'),
     spawn,
     fetch: realFetch,
+    sleep,
   });
   const stdout = out.text();
   const stderr = err.text();
@@ -1124,6 +1125,49 @@ describe('DEMO the demo conference on tier 3', () => {
     assert.equal(operatorFile().hidden[DEMO].reason, 'other');
   });
 
+  test('the second sweep, a minute after the hide, catches what the server accepted from its cached list', async () => {
+    seedDemo();
+    const waits = [];
+    const sleep = async (ms) => {
+      waits.push(ms);
+      // Written while the server still listed the demo as searchable (its 60-second cache).
+      cluster.put(INDEX.meets, 'late-meet', { event_id: DEMO, meet_id: 'late-meet', participants: ['p1', 'p2'], requester_id: 'p1', state: 'requested', expires_at: FUTURE });
+      cluster.patch(INDEX.people, `${DEMO}:p2`, { presence_zone: 'Room 2', presence_until: FUTURE });
+    };
+    const r = await invoke(confirmed(['conferences', 'hide', '--event', DEMO], DEMO), { sleep });
+    assert.equal(r.code, 0, r.stderr);
+    assert.deepEqual(waits, [61_000]);
+    assert.equal(cluster.source(INDEX.meets, 'late-meet'), null);
+    assert.equal(cluster.source(INDEX.people, `${DEMO}:p2`).presence_until, null);
+    assert.match(r.stdout, /cleared presence on 2 profiles, deleted 2 meets and 1 nudge record/);
+  });
+
+  test('a hide that leaves conflicting rows fails and asks for another run', async () => {
+    seedDemo();
+    const conflicted = async (ms) => { void ms; };
+    const original = cluster.answer.bind(cluster);
+    cluster.answer = (method, index, op, ...rest) => {
+      if (op === '_delete_by_query' && index === INDEX.meets) return new Response(JSON.stringify({ deleted: 0, version_conflicts: 1, failures: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+      return original(method, index, op, ...rest);
+    };
+    const r = await invoke(confirmed(['conferences', 'hide', '--event', DEMO], DEMO), { sleep: conflicted });
+    assert.notEqual(r.code, 0);
+    assert.match(r.stderr, /left 1 conflicting and 0 failed documents; run the same conferences hide again/);
+  });
+
+  test('a fresh clone, which has no generated folder for the demo, can hide and unhide it', async () => {
+    seedDemo();
+    rmSync(join(root, 'data', DEMO), { recursive: true, force: true });
+    const hide = await invoke(confirmed(['conferences', 'hide', '--event', DEMO], DEMO));
+    assert.equal(hide.code, 0, hide.stderr);
+    assert.equal(cluster.source(INDEX.conferences, DEMO).status, 'unavailable');
+    assert.equal(readJson(join(root, 'data', DEMO, 'conference.json')).demo, true, 'the generated document stands in for the missing file');
+    rmSync(join(root, 'data', DEMO), { recursive: true, force: true });
+    const unhide = await invoke(confirmed(['conferences', 'unhide', '--event', DEMO], DEMO));
+    assert.equal(unhide.code, 0, unhide.stderr);
+    assert.equal(cluster.source(INDEX.conferences, DEMO).status, 'searchable');
+  });
+
   test('hiding a real conference keeps its presence, meets and nudges, as before', async () => {
     seedDemo();
     seedConferenceFiles(EVENT);
@@ -1165,7 +1209,15 @@ describe('DEMO the demo conference on tier 3', () => {
     assert.equal(rows[INDEX.people], 1);
     assert.equal(rows[INDEX.meets], 1);
     assert.equal(rows[INDEX.conferences], 1);
-    assert.match(usage.json().result.summary, /documents of the demo conference caddie-demo-conference left out of the counts/);
+    assert.match(usage.json().result.summary, /top-level documents counted without the demo conference caddie-demo-conference/);
+    // Versioned index names behind the aliases, as on a real cluster.
+    cluster.put('caddie-talks-v3', 'real-1', { conference: EVENT });
+    cluster.put('caddie-talks-v3', 'real-2', { conference: EVENT });
+    cluster.put('caddie-talks-v3', `${DEMO}:d1-a10`, { conference: DEMO });
+    cluster.put('caddie-people-meets-v2', 'demo-meet', { event_id: DEMO });
+    const versioned = Object.fromEntries((await invoke(['stats', 'usage', '--json'])).json().result.items.slice(1).map((row) => [row.index, row.docs]));
+    assert.equal(versioned['caddie-talks-v3'], 2, 'the demo talk is left out of a versioned talks index');
+    assert.equal(versioned['caddie-people-meets-v2'], 0, 'the longest alias decides the field: event_id of the meets');
     const list = await invoke(['conferences', 'list', '--json']);
     const demo = list.json().result.items.find((c) => c.slug === DEMO);
     assert.equal(demo.demo, true);

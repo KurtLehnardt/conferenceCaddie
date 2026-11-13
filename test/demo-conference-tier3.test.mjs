@@ -3,7 +3,9 @@
 // on loopback for the child process), and the server's GET /api/conferences (server/conferences.mjs)
 // then lists it as searchable with demo: true, in the contract's shape. The next day's run moves the
 // times of the same talks: no talk is re-indexed with its text, none is deleted, the shrink guard is
-// never involved and no people index is touched. A hidden demo is left out of the list.
+// never involved and no people index is touched. A hidden demo is left out of the list. The scheduled
+// refresh (--refresh-only) refreshes a demo the backend holds, and never brings back one an operator
+// hid or removed there, or creates one it does not hold.
 //
 // Run with `npm test`. No network: the child talks to a loopback server, and the server modules use
 // the stubbed fetch of the stand-in. The tracked data is never touched (CADDIE_DATA_DIR).
@@ -36,10 +38,10 @@ cluster.put(INDEX.talks, 'otherconf-2099:1', { talk_id: 'otherconf-2099:1', conf
 cluster.put(INDEX.conferences, 'otherconf-2099', { slug: 'otherconf-2099', name: 'Other Conference', status: 'unavailable', status_reason: 'no_schedule_url', start_date: '2099-01-01', end_date: '2099-01-02', source: 'sessionize' });
 cluster.put(INDEX.conferences, 'old-demo-conference', { slug: 'old-demo-conference', name: 'Old Demo Conference', status: 'unavailable', status_reason: 'operator_hidden', demo: true, source: 'demo', start_date: '2099-01-01', end_date: '2099-01-03' });
 
-async function ingest(today) {
+async function ingest(today, extra = []) {
   const { url, close } = await serve(cluster);
   try {
-    const child = spawn(process.execPath, ['scripts/ingest.mjs', '--event', SLUG, '--skip-topics'], {
+    const child = spawn(process.execPath, ['scripts/ingest.mjs', '--event', SLUG, '--skip-topics', ...extra], {
       cwd: ROOT,
       env: { PATH: process.env.PATH, CADDIE_DATA_DIR: path.join(tmp, 'data'), CADDIE_DEMO_CONFIG: configFile, CADDIE_DEMO_TODAY: today, ES_URL: url, ES_API_KEY: KEY },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -111,4 +113,27 @@ test('the next day moves the times in place: nothing re-embedded or deleted, no 
   assert.deepEqual(cluster.source(INDEX.talks, 'otherconf-2099:1'), before.get('otherconf-2099:1'));
   assert.deepEqual(cluster.source(INDEX.people, `${SLUG}:sharer`), peopleBefore, 'a share for a demo talk is untouched');
   assert.equal(cluster.source(INDEX.conferences, SLUG).end_date, '2026-11-14');
+});
+
+test('--refresh-only refreshes the demo the backend holds, and never brings back a hidden or removed one', async () => {
+  const fresh = await ingest('2026-11-14', ['--refresh-only']);
+  assert.equal(fresh.status, 0, fresh.out);
+  assert.equal(cluster.source(INDEX.conferences, SLUG).end_date, '2026-11-15', 'a held, searchable demo is refreshed');
+
+  // Hidden on the backend (caddie-admin conferences hide) before the operator file reached main.
+  cluster.patch(INDEX.conferences, SLUG, { status: 'unavailable', status_reason: 'operator_hidden' });
+  const hidden = await ingest('2026-11-15', ['--refresh-only']);
+  assert.equal(hidden.status, 0, hidden.out);
+  assert.match(hidden.out, /skipped \(--refresh-only\): the backend holds it as unavailable \(operator_hidden\)/);
+  assert.equal(cluster.source(INDEX.conferences, SLUG).status, 'unavailable');
+  assert.equal(cluster.source(INDEX.conferences, SLUG).end_date, '2026-11-15', 'nothing was written');
+
+  // Removed on the backend (caddie-admin conferences remove): the documents are gone.
+  for (const id of cluster.ids(INDEX.talks).filter((x) => x.startsWith(`${SLUG}:`))) cluster.docs(INDEX.talks).delete(id);
+  cluster.docs(INDEX.conferences).delete(SLUG);
+  const removed = await ingest('2026-11-15', ['--refresh-only']);
+  assert.equal(removed.status, 0, removed.out);
+  assert.match(removed.out, /skipped \(--refresh-only\): caddie-conferences does not hold it; add it first/);
+  assert.equal(cluster.source(INDEX.conferences, SLUG), null);
+  assert.equal(cluster.ids(INDEX.talks).filter((x) => x.startsWith(`${SLUG}:`)).length, 0, 'no talk is created');
 });

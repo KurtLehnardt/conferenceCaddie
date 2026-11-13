@@ -76,7 +76,7 @@ const searchRow = (s) => ({ ref: s.ref, display_name: s.display_name ?? null, hi
 const cut = (value) => (typeof value === 'string' ? value.slice(0, TEXT_MAX) : value ?? null);
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-export function createEsAdapter(backend, { credential, env = {}, spawn = defaultSpawnSync, fetch = (...args) => globalThis.fetch(...args), root = REPO_ROOT, now = () => new Date() } = {}) {
+export function createEsAdapter(backend, { credential, env = {}, spawn = defaultSpawnSync, fetch = (...args) => globalThis.fetch(...args), root = REPO_ROOT, now = () => new Date(), sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
   if (typeof credential !== 'string' || !credential) throw new AdminError('no credential for the Elasticsearch backend');
   const esUrl = String(backend.es_url ?? '').replace(/\/+$/, '');
   if (!esUrl) throw new AdminError(`backend "${backend.name}" has no es_url`);
@@ -124,31 +124,43 @@ export function createEsAdapter(backend, { credential, env = {}, spawn = default
     return (json.hits?.hits ?? []).map((h) => h._source ?? {}).filter((d) => d.demo === true && typeof d.slug === 'string').map((d) => d.slug);
   }
   const withoutDemo = (field, demos) => (demos.length ? { bool: { must_not: [{ terms: { [field]: demos } }] } } : undefined);
-  const onlyDemo = (field, demos) => ({ terms: { [field]: demos } });
 
   // A demo conference that is hidden keeps nothing live: its presence is cleared on every profile
   // (the purge's own PRESENCE_OFF write), and its meet requests (the inbox) and nudge records are
-  // deleted. Returns the counts.
-  async function clearDemoActivity(slug) {
-    const counts = { presence: 0, meets: 0, nudges: 0 };
-    for (let round = 0; round < SEARCH_ROUNDS; round++) {
-      const { json } = await es('POST', `${idx(INDEX.people)}/_search?ignore_unavailable=true`, {
-        size: PRESENCE_PAGE,
-        _source: false,
-        query: { bool: { filter: [{ term: { event_id: slug } }, { exists: { field: 'presence_until' } }] } },
-      });
+  // deleted. One sweep; it throws when anything is left or failed, so the operator runs the hide
+  // again. Returns the counts.
+  const RERUN = 'run the same conferences hide again';
+  async function sweepDemoActivity(slug, counts) {
+    const presenceQuery = { bool: { filter: [{ term: { event_id: slug } }, { exists: { field: 'presence_until' } }] } };
+    for (let round = 0; ; round++) {
+      const { json } = await es('POST', `${idx(INDEX.people)}/_search?ignore_unavailable=true`, { size: PRESENCE_PAGE, _source: false, query: presenceQuery });
       const ids = (json.hits?.hits ?? []).map((h) => h._id);
       if (!ids.length) break;
+      if (round >= SEARCH_ROUNDS) throw new AdminError(`clearing the presence of ${slug} did not finish after ${SEARCH_ROUNDS} pages; ${RERUN}`);
       const body = ids.map((id) => `${JSON.stringify({ update: { _id: id } })}\n${JSON.stringify({ doc: PRESENCE_OFF })}\n`).join('');
       const res = await es('POST', `${idx(INDEX.people)}/_bulk?refresh=wait_for`, body, { ndjson: true });
       const ok = (res.json.items ?? []).filter((i) => i.update?.status >= 200 && i.update?.status < 300).length;
       counts.presence += ok;
-      if (ok < ids.length) throw new AdminError(`clearing the presence of ${slug} failed for ${ids.length - ok} profiles; run the hide again`);
+      if (ok < ids.length) throw new AdminError(`clearing the presence of ${slug} failed for ${ids.length - ok} profiles; ${RERUN}`);
     }
     for (const name of ['meets', 'nudges']) {
       const { json } = await es('POST', `${idx(INDEX[name])}/_delete_by_query?refresh=true&conflicts=proceed&ignore_unavailable=true`, { query: { term: { event_id: slug } } });
-      counts[name] = json.deleted ?? 0;
+      counts[name] += json.deleted ?? 0;
+      const conflicts = json.version_conflicts ?? 0;
+      const failures = Array.isArray(json.failures) ? json.failures.length : 0;
+      if (conflicts || failures) throw new AdminError(`deleting the ${name} of ${slug} left ${conflicts} conflicting and ${failures} failed documents; ${RERUN}`);
     }
+  }
+
+  // The tier 3 server reads the conference list through a 60-second cache, so for up to a minute
+  // after the hide it may still accept presence, meets and nudges for the demo. The second sweep
+  // runs after that minute and catches them.
+  const SERVER_CACHE_MS = 61_000;
+  async function clearDemoActivity(slug) {
+    const counts = { presence: 0, meets: 0, nudges: 0 };
+    await sweepDemoActivity(slug, counts);
+    await sleep(SERVER_CACHE_MS);
+    await sweepDemoActivity(slug, counts);
     return counts;
   }
 
@@ -557,17 +569,18 @@ export function createEsAdapter(backend, { credential, env = {}, spawn = default
       return { items: Object.entries(counts).map(([index, n]) => ({ index, count: n })), counts, summary: event === undefined ? `documents per index${left}` : `documents of ${event} per index` };
     },
 
-    // The document counts leave the demo conference (invented data) out: its documents in each index
-    // are counted and subtracted. The store sizes are the indices' own and cannot be split.
+    // When a demo conference (invented data) exists, the document count of every index that names a
+    // conference is a _count of its top-level documents without the demo's (docs.count of _cat would
+    // also count the nested chunks of semantic_text fields, the demo's included). The store sizes
+    // are the indices' own and cannot be split.
     async usage() {
       const health = (await es('GET', '/_cluster/health')).json;
       const cat = (await es('GET', '/_cat/indices/caddie-*?format=json&h=index,docs.count,store.size')).json;
       const demos = await demoSlugs();
       const rows = [];
       for (const r of Array.isArray(cat) ? cat : []) {
-        let docs = Number(r['docs.count'] ?? 0);
         const field = demos.length ? fieldOfIndex(r.index) : null;
-        if (field) docs = Math.max(0, docs - (await count(r.index, onlyDemo(field, demos))));
+        const docs = field ? await count(r.index, withoutDemo(field, demos)) : Number(r['docs.count'] ?? 0);
         rows.push({ index: r.index, docs, size: r['store.size'] ?? null });
       }
       return {
@@ -576,7 +589,7 @@ export function createEsAdapter(backend, { credential, env = {}, spawn = default
           ...rows,
         ],
         counts: Object.fromEntries(rows.map((r) => [r.index.replace(/[^A-Za-z0-9_]/g, '_').slice(0, 40), r.docs])),
-        summary: `cluster ${health.status ?? '?'}, ${rows.length} caddie ${rows.length === 1 ? 'index' : 'indices'}${demos.length ? ` (documents of the demo conference ${demos.join(', ')} left out of the counts; sizes include them)` : ''} (needs the monitor privilege; the admin key holds it)`,
+        summary: `cluster ${health.status ?? '?'}, ${rows.length} caddie ${rows.length === 1 ? 'index' : 'indices'}${demos.length ? ` (top-level documents counted without the demo conference ${demos.join(', ')}; sizes include it)` : ''} (needs the monitor privilege; the admin key holds it)`,
       };
     },
 

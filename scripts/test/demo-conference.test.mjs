@@ -32,7 +32,7 @@ import { DIMS, BUNDLE_FILE } from '../../contracts/js/bundle.mjs';
 import {
   buildConferenceBundle, validateBuilt, publicConference, buildIndex, parseArgs as bundleArgs, run as buildBundles, DEMO_ATTRIBUTION, ATTRIBUTION,
 } from '../build-bundles.mjs';
-import { status, prepare, parseArgs as demoArgs } from '../demo-conference.mjs';
+import { status, prepare, esCheck, liveEntry, outputLines, parseArgs as demoArgs } from '../demo-conference.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const ON = { ...DEFAULT_DEMO_CONFIG, enabled: true };
@@ -195,7 +195,7 @@ describe('the configuration', () => {
     assert.equal(demoToday(ON, { env: {}, nowMs: at }), '2026-11-11');
     assert.equal(demoToday(ON, { env: { CADDIE_DEMO_TODAY: '2030-01-02' }, nowMs: at }), '2030-01-02');
     assert.throws(() => demoToday(ON, { env: { CADDIE_DEMO_TODAY: '2030-02-30' } }), /YYYY-MM-DD/);
-    assert.ok(isCivilDay('2028-02-29') && !isCivilDay('2027-02-29'));
+    assert.ok(isCivilDay('2028-02-29') && !isCivilDay('2027-02-29') && !isCivilDay('2026-13-01') && !isCivilDay('2026-11-11\n'));
   });
 });
 
@@ -400,12 +400,17 @@ describe('prepare, status and the bundle build', () => {
     assert.equal(readFileSync(path.join(data, SLUG, 'conference.json'), 'utf8'), '{"staged":true}');
   }));
 
-  test('status reads an unreadable live site as stale, and the arguments are checked', async () => {
+  test('an unreadable live site is stale only while the demo is active; the arguments are checked', async () => {
     const failing = async () => { throw new Error('offline'); };
-    const st = await status({ live: 'https://example.invalid/bundles/', root: ROOT, env: { CADDIE_DEMO_TODAY: DAY }, fetchFn: failing });
-    assert.equal(st.stale, true);
-    assert.equal(st.enabled, false);
-    assert.throws(() => demoArgs(['publish']), /status or prepare/);
+    const off = await status({ live: 'https://example.invalid/bundles/', root: ROOT, env: { CADDIE_DEMO_TODAY: DAY }, fetchFn: failing, log: () => {} });
+    assert.equal(off.enabled, false);
+    assert.equal(off.stale, false, 'off: a later build drops it anyway');
+    await withTemp(async (dir) => {
+      const on = await status({ live: 'https://example.invalid/bundles/', root: ROOT, dataDir: path.join(dir, 'none'), env: configEnv(dir, ON), fetchFn: failing, log: () => {} });
+      assert.equal(on.stale, true);
+      assert.equal(on.live, 'unreadable');
+    });
+    assert.throws(() => demoArgs(['publish']), /status, prepare, es-check/);
     assert.throws(() => demoArgs(['status', '--data', 'x']), /Unknown argument/);
     assert.deepEqual(demoArgs(['prepare', '--staged', '']).staged, []);
   });
@@ -429,10 +434,56 @@ describe('the workflows', () => {
     for (const m of y.matchAll(/uses: (\S+)/g)) assert.match(m[1], /^(\.\/\.github\/workflows\/pages\.yml|[\w-]+\/[\w-]+@[0-9a-f]{40})$/, m[1]);
     assert.equal(y.match(/secrets\.CADDIE_DEMO_ES_API_KEY/g).length, 2, 'the configuration check and the ingest step');
     assert.ok(!/secrets\.(?!CADDIE_DEMO_ES_API_KEY)/.test(y), 'no other secret');
-    assert.ok(y.includes('run: node scripts/ingest.mjs --event "$SLUG" --skip-topics'));
+    assert.ok(y.includes('node scripts/ingest.mjs --event "$SLUG" --skip-topics --refresh-only'), 'the schedule never creates or brings back the demo');
+    assert.ok(y.includes('node scripts/demo-conference.mjs es-check'));
+    assert.ok(y.includes('environment: demo-refresh'), 'the key lives in an environment only main may use');
     assert.ok(!/npm (ci|install)/.test(y), 'nothing is installed next to the key');
-    assert.ok(y.includes("if: needs.check.outputs.stale == 'true'"));
+    assert.ok(y.includes("if: needs.check.outputs.stale == 'true' && needs.check.outputs.busy != 'true'"));
     assert.ok(y.includes('demo_refresh: true'));
     assert.match(y, /^permissions:\n {2}contents: read$/m);
+  });
+});
+
+describe('hardening of the workflow steps', () => {
+  const respond = (status, body) => async () => new Response(typeof body === 'string' ? body : JSON.stringify(body), { status });
+
+  test('values from the live site are checked before they reach an output', async () => {
+    const tricky = { conferences: [{ slug: SLUG, status: 'searchable\nenabled=true', start_date: '2026-11-11\nslug=x', end_date: '2026-13-01', bundle: {} }] };
+    const seen = await liveEntry('https://example.invalid/bundles/', SLUG, { fetchFn: respond(200, tricky) });
+    assert.deepEqual(seen, { readable: true, listed: true, status: 'malformed', start_date: null, end_date: null, bundle: true });
+    assert.deepEqual(await liveEntry('https://example.invalid/bundles/', SLUG, { fetchFn: respond(404, '') }), { readable: true, listed: false });
+    assert.equal((await liveEntry('https://example.invalid/bundles/', SLUG, { fetchFn: respond(500, '') })).readable, false);
+    assert.throws(() => outputLines({ live: 'a\nenabled=true' }), /not one plain line/);
+    assert.throws(() => outputLines({ slug: 'Not A Slug' }), /not a slug/);
+    assert.deepEqual(outputLines({ enabled: true, slug: SLUG }), ['enabled=true', `slug=${SLUG}`]);
+  });
+
+  test('a configuration that does not validate turns the demo off with a warning instead of stopping the build', () => withTemp(async (dir) => {
+    const bad = path.join(dir, 'bad.json');
+    writeFileSync(bad, '{"enabled": true, "slug": "kubecon-2026"}');
+    const env = { PATH: process.env.PATH, CADDIE_DEMO_CONFIG: bad, CADDIE_DEMO_TODAY: DAY };
+    const log = [];
+    assert.deepEqual(prepare({ dataDir: path.join(dir, 'data'), env, log: (m) => log.push(m) }), { enabled: false, slug: '' });
+    assert.match(log.join('\n'), /::warning::The demo conference is treated as off: .*contains "demo"/);
+    assert.equal((await status({ live: path.join(dir, 'none'), env, log: () => {} })).stale, false);
+    const data = path.join(dir, 'data');
+    mkdirSync(data, { recursive: true });
+    const r = spawnSync(process.execPath, ['scripts/ingest.mjs', '--event', 'no-such-demo', '--dry-run'], { cwd: ROOT, env: { ...env, CADDIE_DATA_DIR: data }, encoding: 'utf8' });
+    assert.equal(r.status, 1);
+    assert.match(`${r.stdout}${r.stderr}`, /treated as off/);
+  }));
+
+  test('es-check warns only when the demo is off but Elasticsearch still holds it searchable', async () => {
+    const env = { CADDIE_DEMO_CONFIG: path.join(ROOT, 'config/demo-conference.json'), ES_URL: 'https://es.example.invalid', ES_API_KEY: 'k' };
+    const lines = [];
+    const held = await esCheck({ env, fetchFn: respond(200, { found: true, _source: { status: 'searchable' } }), log: (m) => lines.push(m) });
+    assert.equal(held.backend, 'searchable');
+    assert.match(lines.join('\n'), /::warning::The demo conference is switched off .* still holds caddie-demo-conference as searchable/);
+    assert.ok(!lines.join('\n').includes('k\n'), 'the key is never printed');
+    lines.length = 0;
+    assert.equal((await esCheck({ env, fetchFn: respond(404, {}), log: (m) => lines.push(m) })).backend, 'absent');
+    assert.equal((await esCheck({ env, fetchFn: respond(200, { found: true, _source: { status: 'unavailable' } }), log: (m) => lines.push(m) })).backend, 'unavailable');
+    assert.deepEqual(lines, []);
+    await assert.rejects(esCheck({ env, fetchFn: respond(403, {}), log: () => {} }), /status 403/);
   });
 });

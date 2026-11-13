@@ -3,21 +3,31 @@
 # times change every day. It is off unless config/demo-conference.json says "enabled": true, and then
 # this workflow does nothing at all beyond reading that file and the live conferences.json.
 #
-# Every three hours (the runs are idempotent, and a day's first run after midnight in any zone falls
-# before 04:00 there, ahead of the first talk at 07:00):
+# Every three hours at minute 41 (the runs are idempotent, and a day's first run after midnight in
+# any zone falls before 04:00 there, ahead of the first talk at 07:00):
 # - check: reads the switch and the operator file (scripts/demo-conference.mjs status) and compares
-#   the live talk bundles with today's window. No secret.
-# - elasticsearch (tier 3): when the demo is on and the repository holds the variable CADDIE_ES_URL
-#   and the secret CADDIE_DEMO_ES_API_KEY, runs scripts/ingest.mjs --event <demo slug> --skip-topics
-#   against Elasticsearch. The talk ids never change, so the run moves times in place: no talk is
-#   re-embedded or deleted, and nobody's shared talks change. The key is the narrow one that
-#   scripts/create-es-keys.mjs --demo mints (read, write and maintenance on caddie-talks* and
-#   caddie-conferences* only; no people index). Without the two settings the job only logs a notice.
-#   The first index of the demo, with its topics and facets, is the operator's
-#   `caddie-admin conferences add --event <demo slug>` (docs/ADMIN_CLI.md, "The demo conference").
+#   the live talk bundles with today's window. It also notes whether an ingest.yml or pages.yml run
+#   is queued or running: those publish the bundles with today's demo themselves (pages.yml prepares
+#   it in every build), and a call queued now could replace theirs in the "pages" concurrency group.
+#   It holds no secret.
+# - elasticsearch (tier 3), in the environment demo-refresh, whose secret CADDIE_DEMO_ES_API_KEY only
+#   main may use: when the repository variable CADDIE_ES_URL and that secret exist,
+#   - with the demo on, runs scripts/ingest.mjs --event <demo slug> --skip-topics --refresh-only.
+#     The talk ids never change, so the run moves times in place: no talk is re-embedded or deleted,
+#     and nobody's shared talks change. --refresh-only skips the demo when Elasticsearch does not hold
+#     it or holds it hidden or removed by an operator, so this job never creates it or brings it back.
+#   - with the demo off, reads its document and warns when the backend still lists it as searchable
+#     (scripts/demo-conference.mjs es-check): switching it off on tier 3 needs a hide or a remove.
+#   The key is the narrow one that scripts/create-es-keys.mjs --demo mints (read, index and
+#   maintenance on caddie-talks*, read and index on caddie-conferences*; it cannot delete and holds
+#   nothing on the people indices). The job installs nothing, so no third-party code runs next to it.
+#   Without the two settings the job only logs a notice. The first index of the demo, with its topics
+#   and facets, is the operator's `caddie-admin conferences add --event <demo slug>`
+#   (docs/ADMIN_CLI.md, "The demo conference").
 # - pages: when the live bundles are stale (the demo is on and missing or dated another day, or it is
-#   off, hidden or removed and still listed), calls pages.yml, which regenerates the demo for today and
-#   publishes it with the vectors already published (demo_refresh), or drops it.
+#   off, hidden or removed and still listed) and no ingest.yml or pages.yml run is queued or running,
+#   calls pages.yml, which regenerates the demo for today and publishes it with the vectors already
+#   published (demo_refresh), or drops it.
 # The Worker (tier 2) is not refreshed here.
 #
 # GitHub disables scheduled workflows after 60 days without repository activity; run this one by
@@ -26,7 +36,7 @@ name: Demo conference
 
 on:
   schedule:
-    - cron: '23 */3 * * *'
+    - cron: '41 */3 * * *'
   workflow_dispatch:
 
 permissions:
@@ -40,10 +50,14 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
     outputs:
       enabled: ${{ steps.status.outputs.enabled }}
       slug: ${{ steps.status.outputs.slug }}
       stale: ${{ steps.status.outputs.stale }}
+      busy: ${{ steps.busy.outputs.busy }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -72,11 +86,26 @@ jobs:
           case "$bundles" in */) ;; *) bundles="$bundles/" ;; esac
           node scripts/demo-conference.mjs status --live "$bundles"
 
+      # An ingest.yml or pages.yml run that is queued or running publishes the bundles with today's
+      # demo itself; a call queued now could replace a pending one of theirs in the "pages" group.
+      - name: Look for a publishing run in progress
+        id: busy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          busy=false
+          for wf in ingest.yml pages.yml; do
+            n=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$wf/runs?per_page=20" --jq '[.workflow_runs[] | select(.status != "completed")] | length')
+            if [ "$n" != "0" ]; then busy=true; echo "::notice::$wf has $n run(s) queued or running; the demo bundles are left to it."; fi
+          done
+          echo "busy=$busy" >> "$GITHUB_OUTPUT"
+
   elasticsearch:
     needs: check
-    if: needs.check.outputs.enabled == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment: demo-refresh
     steps:
       # The key is in the environment of this step and of the ingest step only. Its value is never
       # printed.
@@ -101,18 +130,24 @@ jobs:
           node-version: 22
 
       # Node built-ins only: nothing is installed, so no third-party code runs next to the key.
-      - name: Refresh the demo conference on Elasticsearch
+      - name: Refresh the demo conference on Elasticsearch, or warn when it is off there too late
         if: steps.config.outputs.ready == 'true'
         env:
           ES_URL: ${{ vars.CADDIE_ES_URL }}
           ES_API_KEY: ${{ secrets.CADDIE_DEMO_ES_API_KEY }}
+          ENABLED: ${{ needs.check.outputs.enabled }}
           SLUG: ${{ needs.check.outputs.slug }}
-        run: node scripts/ingest.mjs --event "$SLUG" --skip-topics
+        run: |
+          if [ "$ENABLED" = "true" ]; then
+            node scripts/ingest.mjs --event "$SLUG" --skip-topics --refresh-only
+          else
+            node scripts/demo-conference.mjs es-check
+          fi
 
   # The permissions are the ceiling for the called jobs, which narrow them, as in ingest.yml.
   pages:
     needs: check
-    if: needs.check.outputs.stale == 'true'
+    if: needs.check.outputs.stale == 'true' && needs.check.outputs.busy != 'true'
     permissions:
       contents: read
       deployments: read

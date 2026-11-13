@@ -58,11 +58,19 @@ function wallToInstant(wall, timeZone) {
   return wall - zoneOffsetMs(t, timeZone);
 }
 
-// 23:59:59 on the conference's last day in its own time zone, as an ISO instant.
-export function visibleUntil(endDate, timeZone) {
+// 23:59:59 on the conference's last day in its own time zone, as an ISO instant. graceDays moves
+// that day later (the demo conference's DEMO_GRACE_DAYS).
+export function visibleUntil(endDate, timeZone, graceDays = 0) {
   const [y, m, d] = String(endDate).split('-').map(Number);
-  return new Date(wallToInstant(Date.UTC(y, m - 1, d, 23, 59, 59), timeZone)).toISOString();
+  return new Date(wallToInstant(Date.UTC(y, m - 1, d + graceDays, 23, 59, 59), timeZone)).toISOString();
 }
+
+// The demo conference (demo: true, invented data) rolls its dates forward every day, so its last day
+// is always tomorrow. What is written with the end of the conference (a profile's visible_until, a
+// push registration's and a nudge record's expires_at, a meet's cap) would then run out a day or two
+// after it was written, and the hourly purge would delete the profiles and push registrations of a
+// demonstration set up the day before. For the demo they last this many days longer.
+export const DEMO_GRACE_DAYS = 7;
 
 // The start (00:00:00) and end (23:59:59) of the current conference day, in milliseconds. Meet
 // requests wait until the end of the day, and "Not now" replies are counted per day.

@@ -105,7 +105,9 @@ export function todayIn(timeZone, nowMs = Date.now()) {
 
 /** True when s is a real calendar day written YYYY-MM-DD. */
 export function isCivilDay(s) {
-  return typeof s === 'string' && DAY_RE.test(s) && new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s;
+  if (typeof s !== 'string' || !DAY_RE.test(s)) return false;
+  const d = new Date(`${s}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
 }
 
 /** The civil date n days after day (negative n: before). Calendar arithmetic, no zone involved. */
@@ -204,25 +206,25 @@ const WORKSHOP_TIMES = Object.freeze([['09:00', '10:30'], ['13:30', '15:00'], ['
 // Invented speakers. The surnames say they are not real people, and so do their organisations.
 const SPEAKERS = Object.freeze([
   ['Avery Example', 'Staff Engineer, Example Corp'],
-  ['Blake Sample', 'Developer Advocate, Sample Systems'],
+  ['Blake Sample', 'Developer Advocate, Notacompany Systems'],
   ['Casey Placeholder', 'Site Reliability Lead, Placeholder Labs'],
   ['Dana Mockwell', 'Security Engineer, Demo Industries'],
-  ['Eli Stubbs', 'Platform Architect, Notreal Networks'],
+  ['Eli Nobody', 'Platform Architect, Notreal Networks'],
   ['Frankie Fixture', 'Engineering Manager, Imaginary Cloud Co.'],
   ['Gray Prototype', 'Principal Engineer, Example Corp'],
-  ['Harper Testwell', 'Open Source Maintainer, Sample Systems'],
-  ['Indy Dummett', 'Data Engineer, Placeholder Labs'],
+  ['Harper Testwell', 'Open Source Maintainer, Notacompany Systems'],
+  ['Indy Nemo', 'Data Engineer, Placeholder Labs'],
   ['Jordan Draftly', 'Machine Learning Engineer, Demo Industries'],
   ['Kai Sandbox', 'Product Manager, Notreal Networks'],
   ['Lee Lorem', 'Staff Engineer, Imaginary Cloud Co.'],
   ['Morgan Ipsum', 'Security Researcher, Example Corp'],
   ['Noor Pretend', 'Developer Advocate, Placeholder Labs'],
-  ['Oakley Notreal', 'Site Reliability Engineer, Sample Systems'],
+  ['Oakley Notreal', 'Site Reliability Engineer, Notacompany Systems'],
   ['Parker Madeup', 'Community Manager, Demo Industries'],
   ['Quinn Fictional', 'Platform Engineer, Notreal Networks'],
   ['Riley Invented', 'Chief Architect, Imaginary Cloud Co.'],
   ['Sam Imaginary', 'Software Engineer, Example Corp'],
-  ['Taylor Hypothetical', 'Engineering Director, Sample Systems'],
+  ['Taylor Hypothetical', 'Engineering Director, Notacompany Systems'],
   ['Uma Specimen', 'Researcher, Placeholder Labs'],
   ['Val Template', 'Solutions Engineer, Demo Industries'],
   ['Wren Dryrun', 'Release Manager, Notreal Networks'],

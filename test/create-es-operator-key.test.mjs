@@ -159,7 +159,10 @@ test('without --operator the script still requires GC_PROJECT', async () => {
 });
 
 // --demo: the key of the demo conference's scheduled refresh (.github/workflows/demo-conference.yml).
-const DEMO_ROLE_INDICES = [{ names: ['caddie-talks*', 'caddie-conferences*'], privileges: ['read', 'write', 'maintenance'] }];
+const DEMO_ROLE_INDICES = [
+  { names: ['caddie-talks*'], privileges: ['read', 'index', 'maintenance'] },
+  { names: ['caddie-conferences*'], privileges: ['read', 'index'] },
+];
 
 test('--demo mints read, write and maintenance on the talks and conferences only, into a 0600 file, and prints no key', async () => {
   const s = await stub();
@@ -173,7 +176,7 @@ test('--demo mints read, write and maintenance on the talks and conferences only
     assert.ok(!r.out.includes(MINTED) && !r.out.includes(ADMIN), 'a key value reached the output');
     assert.match(r.out, /Minted the demo refresh key abcDEF123keyid \(expires in 90d\)/);
     assert.doesNotMatch(r.out, /FAIL/);
-    for (const line of ['demo key: can read caddie-talks', 'demo key: cannot read caddie-people', 'demo key: nothing on caddie-people, caddie-topics or caddie-facets', 'demo key: no cluster privilege']) {
+    for (const line of ['demo key: can read caddie-talks', 'demo key: cannot read caddie-people', 'demo key: nothing on caddie-people, caddie-topics or caddie-facets', 'demo key: no cluster privilege', 'demo key: cannot delete a talk or a conference document']) {
       assert.ok(r.out.includes(`PASS ${line}`), line);
     }
     const role = s.calls.find((c) => c.method === 'PUT' && c.url === '/_security/role/caddie_demo_ingest').body;

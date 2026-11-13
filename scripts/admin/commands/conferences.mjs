@@ -24,6 +24,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AdminError, NotFoundError, UsageError } from '../errors.mjs';
+import { readDemoConfig, buildDemo, demoToday } from '../../lib/demo-conference.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 export const OPERATOR_FILE = 'data/conference-operator.json';
@@ -83,6 +84,21 @@ function readConference(root, slug) {
 
 const COMMIT_NOTE = (files) => `commit ${files.join(' and ')}`;
 
+// The demo conference's document as the generator gives it today, when `slug` is the demo's
+// (config/demo-conference.json), else null. Its data/<slug>/ folder is generated and ignored by git,
+// so a fresh clone has none; hide and unhide take this document instead of refusing. It is read
+// whether the demo is switched on or not, so it can be hidden after the switch is turned off.
+function generatedDemo(root, slug) {
+  let config;
+  try {
+    config = readDemoConfig(root);
+  } catch {
+    return null;
+  }
+  if (config.slug !== slug) return null;
+  return buildDemo(config, demoToday(config)).conference;
+}
+
 export function withConferenceFiles(adapter, { root, now = () => new Date(), tier = 3 } = {}) {
   const rel = (path) => relative(root, path);
   const files = (slug) => [rel(confPath(root, slug)), OPERATOR_FILE];
@@ -109,7 +125,7 @@ export function withConferenceFiles(adapter, { root, now = () => new Date(), tie
     },
 
     async hideConference({ event, slug, reason, mode }) {
-      const local = readConference(root, slug);
+      const local = readConference(root, slug) ?? generatedDemo(root, slug);
       if (!local) throw new NotFoundError(`no ${rel(confPath(root, slug))}; run conferences refresh --event ${slug} first`);
       const operator = readOperatorFile(root);
       if (operator.removed[slug]) throw removedError(slug, mode);
@@ -129,11 +145,14 @@ export function withConferenceFiles(adapter, { root, now = () => new Date(), tie
     },
 
     async unhideConference({ event, slug, mode }) {
-      const local = readConference(root, slug);
+      const stored = readConference(root, slug);
+      const generated = stored ? null : generatedDemo(root, slug);
+      const local = stored ?? generated;
       const operator = readOperatorFile(root);
       if (!local && !operator.hidden[slug]) throw new NotFoundError(`${slug} is not hidden (no ${OPERATOR_FILE} entry and no ${rel(confPath(root, slug))})`);
       const since = now().toISOString();
-      const hasTalks = existsSync(talksPath(root, slug));
+      // The demo's talks are generated, so they always exist.
+      const hasTalks = Boolean(generated) || existsSync(talksPath(root, slug));
       const base = local ?? { slug };
       // The status from before the hide when the operator file recorded one (a conference that
       // was partial_index stays partial_index); searchable needs the talk file to be present.

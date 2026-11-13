@@ -13,6 +13,13 @@
 //   --allow-shrink              let a conference lose more than 10 talks and more than 10% of its talks
 //                               in one run; without it such a run is refused for that conference
 //                               (the shrink guard, below) and a dry run reports that it would be
+//   --refresh-only              refresh only what the conferences index already holds: an event whose
+//                               conference document is missing there, or carries a status_reason that
+//                               an operator set (operator_hidden, operator_removed), is skipped and
+//                               nothing is written for it. The demo conference's scheduled refresh
+//                               (.github/workflows/demo-conference.yml) passes it, so a run can never
+//                               create the demo or bring back one an operator hid or removed on the
+//                               backend before the operator file reached the repository. Not with --dry-run.
 //   --report <file>             write { "processed": [slugs] } when the run ends: the conferences whose
 //                               data/{slug}/conference.json this run wrote. Ended events drop off the
 //                               upcoming list, so data/ also holds conferences this run did not touch;
@@ -88,6 +95,7 @@ const opts = {
   noFetch: false,
   skipTopics: false,
   allowShrink: false,
+  refreshOnly: false,
   report: null,
 };
 for (let i = 0; i < argv.length; i++) {
@@ -105,16 +113,18 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--no-fetch') opts.noFetch = true;
   else if (a === '--skip-topics') opts.skipTopics = true;
   else if (a === '--allow-shrink') opts.allowShrink = true;
+  else if (a === '--refresh-only') opts.refreshOnly = true;
   else if (a === '--report') opts.report = value();
   else usage(`Unknown argument: ${a}`);
 }
 const mode = [...new Set(opts.modes)];
 if (mode.length !== 1) usage('Choose exactly one of --list, --event <slug> or --all-upcoming.');
+if (opts.refreshOnly && opts.dryRun) usage('--refresh-only reads the conferences index, so it cannot be combined with --dry-run.');
 
 function usage(message) {
   console.error(message);
   console.error('Usage: node scripts/ingest.mjs --list | --event <slug> [--event <slug> ...] | --all-upcoming');
-  console.error('       [--index name] [--conferences-index name] [--dry-run] [--no-fetch] [--skip-topics] [--allow-shrink] [--report file]');
+  console.error('       [--index name] [--conferences-index name] [--dry-run] [--no-fetch] [--skip-topics] [--allow-shrink] [--refresh-only] [--report file]');
   process.exit(1);
 }
 
@@ -441,6 +451,15 @@ function planOps(docs, existing) {
   return { ops, counts };
 }
 
+// The stored status of a conference ({ status, status_reason }), or null when the conferences index
+// does not hold it. Any other answer stops the run, so --refresh-only never writes on a guess.
+async function storedConference(slug) {
+  const { status, json } = await es('GET', `/${encodeURIComponent(opts.confIndex)}/_doc/${encodeURIComponent(slug)}?_source_includes=status,status_reason`);
+  if (status === 404) return null;
+  if (status !== 200 || !json) fail(`Reading the conference document of ${slug} from ${opts.confIndex} failed with status ${status}: ${json?.error?.type ?? ''}`);
+  return json.found ? { status: json._source?.status ?? null, status_reason: json._source?.status_reason ?? null } : null;
+}
+
 async function writeConference(conf) {
   writeJson(join(dataDir, conf.slug, 'conference.json'), conf);
   if (opts.dryRun) return;
@@ -477,11 +496,17 @@ async function main() {
   }
 
   // The demo conference is generated, never fetched: a run for it alone reads no event list.
+  // A configuration that does not validate turns the demo off with a warning, so a mistake in it
+  // never stops the runs of the real conferences; asking for an event the list does not know then
+  // names the problem.
   let demo;
+  let demoProblem = null;
   try {
     demo = readDemoConfig(root);
   } catch (e) {
-    fail(e.message);
+    demoProblem = e.message;
+    demo = { enabled: false, slug: null };
+    console.error(`Warning: the demo conference is treated as off: ${demoProblem}`);
   }
   const demoWanted = mode[0] === '--event' && opts.events.includes(demo.slug);
   if (demoWanted && !demo.enabled) {
@@ -529,7 +554,7 @@ async function main() {
   if (mode[0] === '--event') {
     const known = new Set(events.map((e) => e.slug));
     const unknown = lfWanted.filter((s) => !known.has(s));
-    if (unknown.length) fail(`Not in the upcoming LF list: ${unknown.join(', ')}. Run --list to see the slugs.`);
+    if (unknown.length) fail(`Not in the upcoming LF list: ${unknown.join(', ')}. Run --list to see the slugs.${demoProblem ? ` (The demo conference is off because ${demoProblem})` : ''}`);
     const wanted = new Set(lfWanted);
     selected = events.filter((e) => wanted.has(e.slug)); // list order
     if (demoWanted) selected.push(demoEvent());
@@ -550,6 +575,13 @@ async function main() {
   let stopped = false;
   for (const ev of selected) {
     if (stopped) { missing.push(ev.slug); continue; }
+    if (opts.refreshOnly) {
+      const held = await storedConference(ev.slug);
+      if (!held || (typeof held.status_reason === 'string' && held.status_reason.startsWith('operator_'))) {
+        console.log(`${ev.slug}  skipped (--refresh-only): ${held ? `the backend holds it as ${held.status} (${held.status_reason}), set by the operator` : `${opts.confIndex} does not hold it; add it first (caddie-admin conferences add --event ${ev.slug})`}`);
+        continue;
+      }
+    }
     const r = await processEvent(ev);
     if (r.refused) refused.push(ev.slug);
     if (r.peopleFailed) peopleFailed.push(ev.slug);

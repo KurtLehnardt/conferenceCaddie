@@ -59,7 +59,7 @@ import { parseDevice, hashSecret, secretMatches, refFor } from './device.mjs';
 import { CONFERENCES_PREFERENCE, PEOPLE_PURGE_PREFERENCE, conferencePreference, peoplePreference, withPreference } from './preference.mjs';
 import { pauseSemantic, semanticAvailable, isInferenceFailure, esErrorInfo } from './semantic.mjs';
 import { reportCountsFor, HIDE_AT } from './report.mjs';
-import { PRESENCE_OFF, BLE_SESSION_OFF, BLE_CAPS_OFF, EXPIRED_CAPS_QUERY, PENDING_DELETE_QUERY, isPendingDelete, visibleUntil, dayBounds } from './people-shared.mjs';
+import { PRESENCE_OFF, BLE_SESSION_OFF, BLE_CAPS_OFF, EXPIRED_CAPS_QUERY, PENDING_DELETE_QUERY, isPendingDelete, visibleUntil, dayBounds, DEMO_GRACE_DAYS } from './people-shared.mjs';
 import { createProfileDelete, ownBlocksQuery } from './people-delete.mjs';
 
 // Re-exported, so the other server modules and the scripts that import them from here keep working.
@@ -388,12 +388,14 @@ function conferences() {
 
 
 // Returns { slug, visibleUntil, timeZone, demo } for a searchable conference, or throws 400. demo is
-// true for the demo conference (invented data), whose pushes say so (server/nudge.mjs).
+// true for the demo conference (invented data), whose pushes say so (server/nudge.mjs) and whose
+// visibleUntil is DEMO_GRACE_DAYS after its rolling end date (server/people-shared.mjs).
 export async function conferenceFor(slug) {
   if (typeof slug !== 'string' || !SLUG_RE.test(slug)) throw bad('event must be a conference slug');
   const conf = (await conferences()).get(slug);
   if (!conf || conf.status !== 'searchable' || !conf.end_date) throw bad('conference is not available');
-  return { slug, visibleUntil: visibleUntil(conf.end_date, conf.time_zone), timeZone: conf.time_zone || null, demo: conf.demo === true };
+  const demo = conf.demo === true;
+  return { slug, visibleUntil: visibleUntil(conf.end_date, conf.time_zone, demo ? DEMO_GRACE_DAYS : 0), timeZone: conf.time_zone || null, demo };
 }
 
 const topicsCache = new Map(); // slug -> { at, promise }

@@ -20,12 +20,14 @@
 // to overwrite an existing file.
 //
 // --demo mints the key of the demo conference's scheduled refresh (.github/workflows/demo-conference.yml,
-// which runs scripts/ingest.mjs --event <demo slug> --skip-topics) and writes it to a file the same
-// way (default <config dir>/es-demo-key; --out changes the path; --expiration as above, default
-// 90d). It holds read, write and maintenance (the ingest's _refresh) on caddie-talks* and
-// caddie-conferences* only: no people index, no topics or facets index, no cluster privilege. The
-// operator stores it as the repository secret CADDIE_DEMO_ES_API_KEY and deletes the file. A leak of
-// it could rewrite talk and conference documents, never read or change anyone's profile.
+// which runs scripts/ingest.mjs --event <demo slug> --skip-topics --refresh-only) and writes it to a
+// file the same way (default <config dir>/es-demo-key; --out changes the path; --expiration as above,
+// default 90d). It holds read, index (which writes and updates documents but never deletes them) and
+// maintenance (the ingest's _refresh) on caddie-talks*, and read and index on caddie-conferences*:
+// no delete, no people index, no topics or facets index, no cluster privilege. The operator stores it
+// as the secret CADDIE_DEMO_ES_API_KEY of the GitHub environment demo-refresh, which only main may
+// use, and deletes the file. A leak of it could overwrite talk and conference documents (and so hide
+// or change a real conference), never delete one, and never read or change anyone's profile.
 //
 // --only caddie-es-readonly (or caddie-es-people) re-mints just that key; the other is only
 // verified.
@@ -114,13 +116,17 @@ const OPERATOR = {
   ],
 };
 
-// The demo conference's refresh key (--demo). Cluster privileges: none.
+// The demo conference's refresh key (--demo). Cluster privileges: none. index rather than write, so
+// it can never delete: the refresh only updates the demo's talks in place and rewrites its document.
 const DEMO = {
   user: 'caddie-demo-svc',
   role: 'caddie_demo_ingest',
   name: 'caddie-demo-ingest',
   cluster: [],
-  indices: [{ names: ['caddie-talks*', 'caddie-conferences*'], privileges: ['read', 'write', 'maintenance'] }],
+  indices: [
+    { names: ['caddie-talks*'], privileges: ['read', 'index', 'maintenance'] },
+    { names: ['caddie-conferences*'], privileges: ['read', 'index'] },
+  ],
 };
 
 async function es(method, path, body, auth = `ApiKey ${ADMIN}`) {
@@ -324,11 +330,11 @@ async function demoChecks(D, check) {
     {
       cluster: ['monitor', 'manage', 'manage_security', 'manage_api_key', 'manage_inference', 'monitor_inference'],
       index: [
-        { names: ['caddie-talks'], privileges: ['read', 'write', 'maintenance', 'manage', 'create_index', 'delete_index'] },
-        { names: ['caddie-conferences'], privileges: ['read', 'write', 'manage', 'delete_index'] },
-        { names: ['caddie-people'], privileges: ['read', 'write'] },
-        { names: ['caddie-topics'], privileges: ['read', 'write'] },
-        { names: ['caddie-facets'], privileges: ['write'] },
+        { names: ['caddie-talks'], privileges: ['read', 'index', 'maintenance', 'write', 'delete', 'manage', 'create_index', 'delete_index'] },
+        { names: ['caddie-conferences'], privileges: ['read', 'index', 'write', 'delete', 'manage', 'delete_index'] },
+        { names: ['caddie-people'], privileges: ['read', 'index', 'write'] },
+        { names: ['caddie-topics'], privileges: ['read', 'index', 'write'] },
+        { names: ['caddie-facets'], privileges: ['index', 'write'] },
       ],
     },
     D,
@@ -336,9 +342,10 @@ async function demoChecks(D, check) {
   const cl = priv.json?.cluster ?? {};
   const ix = priv.json?.index ?? {};
   check(priv.status === 200 && Object.keys(cl).length > 0 && Object.values(cl).every((v) => v === false), 'demo key: no cluster privilege (no monitor, manage, security or inference)');
-  check(['read', 'write', 'maintenance'].every((p) => ix['caddie-talks']?.[p] === true) && ['read', 'write'].every((p) => ix['caddie-conferences']?.[p] === true), 'demo key: read, write and maintenance on caddie-talks, read and write on caddie-conferences');
+  check(['read', 'index', 'maintenance'].every((p) => ix['caddie-talks']?.[p] === true) && ['read', 'index'].every((p) => ix['caddie-conferences']?.[p] === true), 'demo key: read, index and maintenance on caddie-talks, read and index on caddie-conferences');
+  check(['write', 'delete'].every((p) => ix['caddie-talks']?.[p] === false && ix['caddie-conferences']?.[p] === false), 'demo key: cannot delete a talk or a conference document (no write, no delete)');
   check(['manage', 'create_index', 'delete_index'].every((p) => ix['caddie-talks']?.[p] === false) && ['manage', 'delete_index'].every((p) => ix['caddie-conferences']?.[p] === false), 'demo key: no index management on caddie-talks or caddie-conferences');
-  check(['caddie-people', 'caddie-topics'].every((n) => ix[n]?.read === false && ix[n]?.write === false) && ix['caddie-facets']?.write === false, 'demo key: nothing on caddie-people, caddie-topics or caddie-facets');
+  check(['caddie-people', 'caddie-topics'].every((n) => ix[n]?.read === false && ix[n]?.index === false && ix[n]?.write === false) && ix['caddie-facets']?.index === false && ix['caddie-facets']?.write === false, 'demo key: nothing on caddie-people, caddie-topics or caddie-facets');
 }
 
 // What the operator key may do (caddie-admin).
