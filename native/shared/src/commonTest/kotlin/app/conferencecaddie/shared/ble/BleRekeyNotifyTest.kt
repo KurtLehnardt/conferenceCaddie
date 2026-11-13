@@ -1,6 +1,7 @@
 package app.conferencecaddie.shared.ble
 
 import app.conferencecaddie.shared.net.HttpResponse
+import app.conferencecaddie.shared.people.ConferenceInfo
 import app.conferencecaddie.shared.people.ConnectRuntime
 import app.conferencecaddie.shared.people.FakeApiHttp
 import app.conferencecaddie.shared.people.FIXTURE_CONFERENCE
@@ -408,12 +409,45 @@ class BleRekeyNotifyTest {
         val b = BleRig(this)
         b.h.conference = FIXTURE_CONFERENCE.copy(demo = true)
         b.on()
+        assertTrue(b.radio.starts.last().demo, "the radio is told, for Android's ongoing notification")
         b.h.server.sightings = { b.answer(nearby("r1", evidence = "Kubernetes")) }
         b.radio.hear(otherPayload(1), -60, b.now())
         runCurrent()
         val shown = b.h.notifier.ble().single()
-        assertEquals("Conference Caddie · Demo conference", shown.title)
-        assertEquals("Someone who's worked on Kubernetes is right near you", shown.body)
+        assertEquals("Conference Caddie (Demo)", shown.title)
+        assertEquals("Demo: Someone who's worked on Kubernetes is right near you", shown.body)
+    }
+
+    @Test
+    fun aRadioLeftRunningAtAnotherConferenceIsNamedFromTheConferenceList() = runTest {
+        val b = BleRig(this)
+        b.on()
+        assertFalse(b.radio.starts.last().demo)
+        // Another conference is selected now; the backend's list says the radio's one is a demo.
+        val other = ConferenceInfo("other-conf-2099", "Other")
+        b.controller.updateContext(b.h.context(BLE_ON).copy(conference = other, bundle = null, interested = emptyList(), listed = listOf(other, FIXTURE_CONFERENCE.copy(demo = true))))
+        runCurrent()
+        b.h.server.sightings = { b.answer(nearby("r1", evidence = "Kubernetes")) }
+        b.radio.hear(otherPayload(1), -60, b.now())
+        runCurrent()
+        assertEquals("Conference Caddie (Demo)", b.h.notifier.ble().single().title)
+    }
+
+    @Test
+    fun theDemoMarkKeptAtTurnOnOutlivesAListThatIsNotLoaded() = runTest {
+        val b = BleRig(this)
+        b.h.conference = FIXTURE_CONFERENCE.copy(demo = true)
+        b.on()
+        // Another conference is selected and the list is not loaded: only the device's record knows.
+        val other = ConferenceInfo("other-conf-2099", "Other")
+        b.controller.updateContext(b.h.context(BLE_ON).copy(conference = other, bundle = null, interested = emptyList(), listed = emptyList(), listKnown = false))
+        runCurrent()
+        b.h.server.sightings = { b.answer(nearby("r1", evidence = "Kubernetes")) }
+        b.radio.hear(otherPayload(1), -60, b.now())
+        runCurrent()
+        val shown = b.h.notifier.ble().single()
+        assertEquals("Conference Caddie (Demo)", shown.title)
+        assertTrue(shown.body.startsWith("Demo: "))
     }
 
     @Test

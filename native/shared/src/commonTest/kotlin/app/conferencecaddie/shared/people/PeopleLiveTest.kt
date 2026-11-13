@@ -265,8 +265,9 @@ class PeopleLiveTest {
         runCurrent()
         h.controller.backgroundCheck()
         val shown = h.notifier.shown.single()
-        assertEquals("Conference Caddie · Demo conference", shown.title)
-        assertEquals("Someone who's worked on Built eBPF probes is in Hallway right now", shown.body, "the words stay the banner's")
+        assertEquals("Conference Caddie (Demo)", shown.title)
+        assertEquals("Demo: Someone who's worked on Built eBPF probes is in Hallway right now", shown.body, "the banner's words after Demo: ")
+        assertEquals("Someone who's worked on Built eBPF probes is in Hallway right now", h.state.nudge?.text, "the banner itself keeps its words")
     }
 
     @Test

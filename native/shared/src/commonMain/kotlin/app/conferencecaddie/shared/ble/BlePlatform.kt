@@ -135,6 +135,8 @@ data class BleRadioConfig(
     val nearRssi: Int,
     /** Epoch milliseconds at which the radio stops by itself at the latest: the latest `presence_until` seen. */
     val untilEpochMillis: Long,
+    /** A demo conference's radio: Android's ongoing notification then says so ([app.conferencecaddie.shared.Demo.notification]). */
+    val demo: Boolean = false,
 )
 
 /** Where a radio reads the payload to advertise and to serve, at any moment. */

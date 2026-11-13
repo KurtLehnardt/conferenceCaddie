@@ -534,7 +534,8 @@ internal class BleRuntime(
         val radio = platform?.radio ?: return
         val settings = host.bleSettings()
         val until = untilOf(slug) ?: return
-        val r = Run(slug, alias, BleRadioConfig(nearRssi = settings.nearRssi, untilEpochMillis = until), settings.sightingsMinIntervalSeconds * 1000L)
+        val config = BleRadioConfig(nearRssi = settings.nearRssi, untilEpochMillis = until, demo = host.demo(slug))
+        val r = Run(slug, alias, config, settings.sightingsMinIntervalSeconds * 1000L)
         run = r
         r.windowJob = scope.launch {
             while (true) {
@@ -854,10 +855,11 @@ internal class BleRuntime(
             host.recordNudge(slug, p.ref)
             store.update(slug) { it.copy(ble = it.ble.copy(notifiedAt = recent + now)) }
             host.reveal(slug, p.ref)
+            val demo = host.demo(slug)
             host.notifier.show(
                 NOTIFICATION_ID_PREFIX + slug,
-                Demo.notificationTitle(ConnectRuntime.NOTIFICATION_TITLE, host.demo(slug)),
-                PeopleText.nearbyText(evidence),
+                Demo.notificationTitle(ConnectRuntime.NOTIFICATION_TITLE, demo),
+                Demo.notificationBody(PeopleText.nearbyText(evidence), demo),
                 ConnectRuntime.NUDGE_DEEP_LINK,
             )
             host.changed()

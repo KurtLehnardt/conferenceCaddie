@@ -477,7 +477,11 @@ internal class ConnectRuntime(
         recordNudge(slug, p.ref)
         current = nudge
         host.changed()
-        if (notify) host.notifier.show(NUDGE_NOTIFICATION_ID, Demo.notificationTitle(NOTIFICATION_TITLE, host.demo(slug)), nudge.text, NUDGE_DEEP_LINK)
+        if (notify) {
+            // A demo conference's notification says so in its title and at the start of its body.
+            val demo = host.demo(slug)
+            host.notifier.show(NUDGE_NOTIFICATION_ID, Demo.notificationTitle(NOTIFICATION_TITLE, demo), Demo.notificationBody(nudge.text, demo), NUDGE_DEEP_LINK)
+        }
     }
 
     companion object {

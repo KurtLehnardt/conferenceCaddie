@@ -9,6 +9,7 @@ import android.content.Intent
 import android.graphics.drawable.Icon
 import android.os.Build
 import app.conferencecaddie.shared.AndroidNotifier
+import app.conferencecaddie.shared.Demo
 import app.conferencecaddie.shared.NUDGE_NOTIFICATION_LINK
 import app.conferencecaddie.shared.NotificationTapKey
 
@@ -59,11 +60,16 @@ internal object BleRadioNotification {
         )
     }
 
+    /** The app's name, the title of every notification about a demo conference ([Demo.notification]). */
+    private const val APP_NAME = "Conference Caddie"
+
     /**
      * The notification, with [smallIcon] (the application's monochrome icon) in the status bar, and
-     * [OPEN_TO_LISTEN] as its text when [openToListen].
+     * [OPEN_TO_LISTEN] as its text when [openToListen]. For a [demo] conference it is titled
+     * "Conference Caddie (Demo)" and its text starts with "Demo: " and [TITLE], as every notification
+     * about a demo conference does.
      */
-    fun build(context: Context, smallIcon: Int, openToListen: Boolean = false): Notification {
+    fun build(context: Context, smallIcon: Int, openToListen: Boolean = false, demo: Boolean = false): Notification {
         ensureChannel(context)
         val stop = PendingIntent.getService(
             context,
@@ -79,11 +85,11 @@ internal object BleRadioNotification {
             Intent(BleRadioService.ACTION_NOTIFICATION_DELETED).setPackage(context.packageName),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val text = if (openToListen) OPEN_TO_LISTEN else TEXT
+        val (title, text) = Demo.notification(APP_NAME, TITLE, if (openToListen) OPEN_TO_LISTEN else TEXT, demo)
         val builder = Notification.Builder(context, CHANNEL_ID)
             .setSmallIcon(smallIcon)
             .setColor(ACCENT)
-            .setContentTitle(TITLE)
+            .setContentTitle(title)
             .setContentText(text)
             .setStyle(Notification.BigTextStyle().bigText(text))
             .setDeleteIntent(deleted)

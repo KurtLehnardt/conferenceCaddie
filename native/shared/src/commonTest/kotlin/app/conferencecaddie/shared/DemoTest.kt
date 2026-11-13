@@ -3,7 +3,8 @@ package app.conferencecaddie.shared
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-// The words of the "Demo" label, which must match the web's (web/src/components/demo.tsx).
+// The words of the "Demo" label, which must match the web's (web/src/components/demo.ts), and the
+// notification rule of docs/contracts/talk-bundle.md.
 class DemoTest {
     @Test
     fun theWordsMatchTheWeb() {
@@ -19,8 +20,20 @@ class DemoTest {
     }
 
     @Test
-    fun aNotificationTitleSaysDemoOnlyForADemoConference() {
-        assertEquals("Conference Caddie · Demo conference", Demo.notificationTitle("Conference Caddie", demo = true))
+    fun aNotificationAboutADemoConferenceIsTitledAndPrefixedOneWay() {
+        assertEquals("Conference Caddie (Demo)", Demo.notificationTitle("Conference Caddie", demo = true))
         assertEquals("Conference Caddie", Demo.notificationTitle("Conference Caddie", demo = false))
+        assertEquals("Demo: Someone is near you", Demo.notificationBody("Someone is near you", demo = true))
+        assertEquals("Someone is near you", Demo.notificationBody("Someone is near you", demo = false))
+    }
+
+    @Test
+    fun aNotificationWithItsOwnTitleKeepsItInTheBody() {
+        val title = "Conference Caddie is finding people near you"
+        assertEquals(
+            "Conference Caddie (Demo)" to "Demo: Conference Caddie is finding people near you. Your phone broadcasts a code.",
+            Demo.notification("Conference Caddie", title, "Your phone broadcasts a code.", demo = true),
+        )
+        assertEquals(title to "Your phone broadcasts a code.", Demo.notification("Conference Caddie", title, "Your phone broadcasts a code.", demo = false))
     }
 }
