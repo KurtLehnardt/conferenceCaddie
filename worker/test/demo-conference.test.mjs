@@ -9,12 +9,13 @@
 //   the talk ids are the same, so finalize deletes nothing, no shared talk is unshared, no profile
 //   is deleted and FINALIZE_MAX_DELETE never refuses. With --refresh-only it pushes only while the
 //   Worker lists the demo as searchable, so a refresh never adds, shows or brings back the demo.
-// - The demo's people last DEMO_GRACE_DAYS past its last day, as on tier 3.
+// - The demo's people last DEMO_GRACE_DAYS past its last day, the same number as tier 3's.
 // - Switching it off: a hidden demo deletes its presence (with the Bluetooth session), positions,
 //   Bluetooth caps, meets, nudges and nudge sends, keeps its profiles, and leaves the public list;
 //   a real conference's hide keeps everything; a removed demo leaves no row.
-// - The tier 2 CLI (scripts/admin/backends/worker.mjs) marks the demo in conferences list and still
-//   reaches a hidden demo, which the Worker no longer lists, for hide, unhide and unretire.
+// - The tier 2 CLI (scripts/admin/backends/worker.mjs, under the command layer of
+//   scripts/admin/commands/conferences.mjs) marks the demo in conferences list and still reaches a
+//   hidden demo, which the Worker no longer lists, for hide, unhide and unretire.
 //
 // Every request goes through the Worker's fetch handler, signed with the shared fixture's fake key,
 // to real objects on node:sqlite (helpers/harness.mjs), with fake embeddings (EMBED_FAKE). The demo
@@ -24,7 +25,9 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createDecipheriv, createECDH, createHash, hkdfSync, randomBytes } from 'node:crypto';
 import { skip, worker, ConferenceDO, DirectoryDO, fakeState, namespace, withFixedClock } from './helpers/harness.mjs';
 import { signAdminRequest } from '../../scripts/lib/admin-sign.mjs';
@@ -34,10 +37,10 @@ import { validator } from '../../contracts/js/schemas.mjs';
 import { formatErrors } from '../../contracts/js/validate.mjs';
 import { listedSearchable, pushEvent, refreshOnly, upsertConferences, workerTalks } from '../ingest/push-ingest.mjs';
 import { DEMO_GRACE_DAYS, conferenceVisibleUntilMs, visibleUntilMs } from '../src/lib/time.js';
-import * as demoLib from '../../scripts/lib/demo-conference.mjs';
-import * as peopleShared from '../../server/people-shared.mjs';
+import { DEMO_GRACE_DAYS as TIER3_DEMO_GRACE_DAYS } from '../../server/people-shared.mjs';
 import { loadStoplist } from '../ingest/topics-local.mjs';
 import { createWorkerAdapter } from '../../scripts/admin/backends/worker.mjs';
+import { withConferenceFiles } from '../../scripts/admin/commands/conferences.mjs';
 import { NotFoundError } from '../../scripts/admin/errors.mjs';
 
 const fixture = JSON.parse(readFileSync(new URL('../../test/fixtures/admin-sign.v1.json', import.meta.url), 'utf8'));
@@ -511,13 +514,8 @@ describe('the demo grace', { skip }, () => {
     });
   });
 
-  test('tier 3 and the Worker give the demo the same grace, once tier 3 exports it', (t) => {
-    const tier3 = peopleShared.DEMO_GRACE_DAYS ?? demoLib.DEMO_GRACE_DAYS;
-    if (tier3 === undefined) {
-      t.skip('tier 3 does not export DEMO_GRACE_DAYS in this tree yet');
-      return;
-    }
-    assert.equal(DEMO_GRACE_DAYS, tier3);
+  test('tier 3 and the Worker give the demo the same grace', () => {
+    assert.equal(DEMO_GRACE_DAYS, TIER3_DEMO_GRACE_DAYS);
   });
 });
 
@@ -640,6 +638,41 @@ describe('the tier 2 CLI and a demo the Worker does not list', { skip }, () => {
       const unknown = 'nowhere-demo-conference';
       await assert.rejects(adapter.hideConference({ event: unknown, slug: unknown, mode: 'run', doc: { ...hiddenDemo(), slug: unknown } }), NotFoundError);
       await assert.rejects(adapter.hideConference({ event: REAL2, slug: REAL2, mode: 'run', doc: realConf(REAL2, { status: 'unavailable' }) }), NotFoundError);
+    }
+  });
+
+  test('conferences hide, hide again and unhide of the demo from a clone without its data folder, after the switch is off', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'caddie-demo-tier2-'));
+    const configFile = join(tmp, 'demo-config.json');
+    writeFileSync(configFile, JSON.stringify({ enabled: false }));
+    const saved = { config: process.env.CADDIE_DEMO_CONFIG, today: process.env.CADDIE_DEMO_TODAY };
+    process.env.CADDIE_DEMO_CONFIG = configFile;
+    process.env.CADDIE_DEMO_TODAY = DAY;
+    try {
+      const ctx = realEnv();
+      await putConferences(ctx, [demoConf(DAY)]);
+      const o = ctx.obj(DEMO);
+      await populatePeople(o, DEMO);
+      // The command layer over the tier 2 adapter, as caddie-admin runs it: hide and unhide take the
+      // generator's document for the demo's slug, which carries demo: true.
+      const cli = withConferenceFiles(adapterFor(ctx), { root: tmp, tier: 2 });
+      const hidden = await cli.hideConference({ event: DEMO, slug: DEMO, reason: 'other', mode: 'run' });
+      assert.match(hidden.summary, /was searchable; 1 object synced/);
+      assert.deepEqual(hidden.files, ['data/conference-operator.json'], 'only the operator file is to be committed');
+      assert.ok(!(await listed(ctx)).some((c) => c.slug === DEMO));
+      for (const t of LIVE) assert.equal(counts(ctx.db(`conference:${DEMO}`))[t], 0, t);
+      const again = await cli.hideConference({ event: DEMO, slug: DEMO, reason: 'other', mode: 'run' });
+      assert.match(again.summary, /was unavailable; 1 object synced/);
+      const shown = await cli.unhideConference({ event: DEMO, slug: DEMO, mode: 'run' });
+      assert.match(shown.summary, /restored searchable/);
+      assert.ok((await listed(ctx)).some((c) => c.slug === DEMO && c.status === 'searchable' && c.demo === true));
+      assert.deepEqual(JSON.parse(readFileSync(join(tmp, 'data/conference-operator.json'), 'utf8')).hidden, {});
+    } finally {
+      for (const [k, v] of [['CADDIE_DEMO_CONFIG', saved.config], ['CADDIE_DEMO_TODAY', saved.today]]) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+      rmSync(tmp, { recursive: true, force: true });
     }
   });
 
