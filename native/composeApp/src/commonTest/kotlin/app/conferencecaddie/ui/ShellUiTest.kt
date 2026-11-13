@@ -275,6 +275,17 @@ class ShellUiTest {
     }
 
     @Test
+    fun settingsLinksToThePrivacyPolicy() = runComposeUiTest {
+        var opened: String? = null
+        setContent { App(state(), ShellActions(onOpenUrl = { opened = it })) }
+
+        onNodeWithContentDescription(Strings.AppBar.SETTINGS).performClick()
+        onNodeWithText(Strings.Settings.PRIVACY_POLICY).performScrollTo().performClick()
+        waitForIdle()
+        assertEquals(Strings.Settings.PRIVACY_URL, opened)
+    }
+
+    @Test
     fun theSystemBackLeavesSettings() = runComposeUiTest {
         val back = SystemBack()
         setContent { back.Provide { App(state()) } }

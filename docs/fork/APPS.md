@@ -104,7 +104,7 @@ Use `--no-configuration-cache` so the passwords are not written into Gradle's co
 
 ### CI secrets, variables and the `release` environment
 
-In CI, Gradle never sees the key. The build job makes an unsigned release APK, and a separate job in the GitHub environment `release` signs that file with the runner's own Android tools, without checking out or running project code. Create the environment, restrict it to `main`, and add the four secrets there:
+In CI, Gradle never sees the key. The build job makes an unsigned release APK and an unsigned Android App Bundle for Google Play, and a separate job in the GitHub environment `release` signs both files with the runner's own Android tools and JDK, without checking out or running project code. Create the environment, restrict it to `main`, and add the four secrets there:
 
 **GitHub plan note.** Environments with their own secrets and branch rules are available for private repositories only on a paid GitHub plan (Pro, Team or Enterprise); a public repository has them on every plan. On a **private repository under GitHub Free**, `--env release` does not work. Set the same secrets at repository level (leave out `--env release`; the first run creates an empty `release` environment by itself), and understand the cost: a repository secret can be read by a workflow on any branch that someone with write access pushes, so the signing key is no longer limited to `main`. For that reason a public fork is the better home for signing keys, or keep the keys off GitHub and sign locally.
 
@@ -121,9 +121,41 @@ gh secret set ANDROID_KEY_PASSWORD --env release --repo <owner>/<repo>
 gh variable set ANDROID_RELEASE_CERT_SHA256 --repo <owner>/<repo> --body "<the SHA256 fingerprint>"
 ```
 
-You can also create the environment and its branch rule in the repository settings, under Environments. The signing jobs fail unless the signed APK's certificate matches the repository variable `ANDROID_RELEASE_CERT_SHA256`, which is how a wrong key is caught. When the secrets are missing, the signing step is skipped with a notice and the debug and unsigned builds still work. Both workflows (`android-apk.yml` and `native.yml`) sign on `main` only, and a manual run of `android-apk.yml` on `main` produces a signed release APK.
+You can also create the environment and its branch rule in the repository settings, under Environments. The signing jobs fail unless the signed APK's certificate, and the bundle's, matches the repository variable `ANDROID_RELEASE_CERT_SHA256`, which is how a wrong key is caught. When the secrets are missing, the signing step is skipped with a notice and the debug and unsigned builds still work. Both workflows (`android-apk.yml` and `native.yml`) sign on `main` only, and a manual run of `android-apk.yml` on `main` produces a signed release APK.
 
 Never print a secret in a log, never `echo` it and never store the keystore in the repository; both `.gitignore` files exclude `*.jks`, `*.keystore`, `*.p8` and `*.p12`.
+
+## Google Play
+
+Publishing on Google Play is optional; the signed APK from CI works without it. Google Play needs a developer account (a one-time fee of 25 USD), an application id of your own (see [The application id](#the-application-id); `app.conferencecaddie` belongs to the maintainer's Play account), and a privacy policy address. [docs/store/PLAY.md](../store/PLAY.md) has the store listing, the Data safety and content rating answers, and the steps for internal testing.
+
+### The app bundle
+
+Play takes an Android App Bundle, not an APK. Every run of `native.yml` builds one with `-Pcaddie.unsignedRelease=true :androidApp:bundleRelease`, and on `main` the sign job signs it with the same key as the APK and keeps it as the artifact `conference-caddie-native-<commit>-release.aab` for 30 days. To build one locally, from `native/`:
+
+```sh
+./gradlew :androidApp:bundleRelease     # signed with the debug key
+```
+
+To sign it with your key, run `./gradlew --no-configuration-cache :androidApp:bundleRelease` inside the subshell of [A local signed build](#a-local-signed-build), in place of `assembleRelease`, so the passwords are not written into Gradle's configuration cache. The bundle is `androidApp/build/outputs/bundle/release/androidApp-release.aab`.
+
+- **Every ABI.** The APK holds only arm64-v8a, but the bundle holds all four ABIs that ONNX Runtime ships (arm64-v8a, armeabi-v7a, x86 and x86_64), because Play builds one APK per device from it and each device downloads only its own native libraries, about 38 to 42 MB in all. The bundle file itself is about 141 MB, half of it native debug symbols and the R8 mapping, which Play keeps for crash reports and never sends to phones.
+- **Separate Gradle runs.** The Android Gradle plugin refuses to build a bundle while the APK's ABI splits are on, so a Gradle run that asks for a bundle task turns them off (`native/androidApp/build.gradle.kts`). Build APKs and the bundle in separate runs; in one run together, the APKs would not be split.
+- **16 KB pages.** Play refuses an app that targets Android 15 or newer when its 64-bit native libraries are not aligned for 16 KB memory pages. CI checks every arm64-v8a and x86_64 library in the bundle.
+- **Version codes.** The APK and the bundle of one run share the version code 1000 plus the run number. Play refuses a version code it has seen, so upload the bundle of a newer run each time.
+
+### Play App Signing
+
+Play signs the APKs it delivers with an **app signing key**, and checks every bundle you upload against an **upload key**. The recommended setup, and the one this project uses, is that Google generates and keeps the app signing key and your `release.jks` becomes the upload key. When you create the app in Play Console and upload the first bundle, accept "Let Google create and manage my app signing key". Then:
+
+- If the upload key is lost or leaks, Google can register a new one after you ask in Play Console, and installed apps keep updating. A lost app signing key could never be replaced.
+- **An app installed from Play and an APK from GitHub Releases cannot update each other.** Play's copy is signed with Google's app signing key and the GitHub APK with `release.jks`, so Android refuses to install one over the other. To switch, uninstall the app first, which deletes its data on the phone: the talks you marked, the people you met, and the device secret of a profile, which can then no longer be edited or deleted from the phone and stays on the server until its conference ends. Delete the profile in the app first if it should go at once.
+
+The alternative, for one key everywhere: choose "Use existing app signing key from Java keystore" and upload `release.jks` as the app signing key with the PEPK tool that Play Console offers, which encrypts the key for Google. Play-installed and GitHub-installed apps can then update each other. The cost is that the key you share with every channel can no longer be replaced if it leaks. Play recommends a separate upload key in that case, but it accepts the app signing key as the upload key too. Keeping `release.jks` as both leaves the CI sign job as it is; a separate upload key would need the job to sign the bundle with that key and the APK with `release.jks`, which it does not do today. Decide before the first upload: Play fixes the app signing key then and afterwards offers only a limited key upgrade.
+
+### The privacy policy
+
+The Pages workflow publishes the apps' privacy policy at `https://<owner>.github.io/<repository>/privacy.html`, generated by `scripts/lib/privacy-page.mjs`. Its contacts are your repository's issues and, when you set the repository variable `CADDIE_PRIVACY_EMAIL`, that address. The rest describes the maintainer's deployment, including which providers host the server and where, and a test fails when the server it names differs from `Defaults.BACKEND`. Before you publish your own build, rewrite the service providers section for your hosting, check the retention it states against your deployment, and point `Strings.Settings.PRIVACY_URL` (`native/composeApp/src/commonMain/kotlin/app/conferencecaddie/ui/strings/Strings.kt`), which Settings opens, at your page.
 
 ## iOS: your Apple team, bundle id and device builds
 

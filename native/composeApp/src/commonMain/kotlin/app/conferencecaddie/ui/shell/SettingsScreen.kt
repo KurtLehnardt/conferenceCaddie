@@ -142,6 +142,7 @@ fun SettingsScreen(
             SettingsTextRow(Strings.Settings.ABOUT_2)
             SettingsTextRow(Strings.Settings.ABOUT_3)
             SettingsLinkRow(Strings.Settings.SOURCE_CODE, LucideIcon.ExternalLink, { onOpenUrl(Strings.Settings.SOURCE_URL) })
+            SettingsLinkRow(Strings.Settings.PRIVACY_POLICY, LucideIcon.ExternalLink, { onOpenUrl(Strings.Settings.PRIVACY_URL) })
             SettingsLinkRow(Strings.Settings.LICENSES, LucideIcon.Scale, { licensesOpen = true })
             SettingsValueRow(Strings.Settings.VERSION, state.appVersion)
         }
