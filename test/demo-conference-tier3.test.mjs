@@ -38,8 +38,8 @@ cluster.put(INDEX.talks, 'otherconf-2099:1', { talk_id: 'otherconf-2099:1', conf
 cluster.put(INDEX.conferences, 'otherconf-2099', { slug: 'otherconf-2099', name: 'Other Conference', status: 'unavailable', status_reason: 'no_schedule_url', start_date: '2099-01-01', end_date: '2099-01-02', source: 'sessionize' });
 cluster.put(INDEX.conferences, 'old-demo-conference', { slug: 'old-demo-conference', name: 'Old Demo Conference', status: 'unavailable', status_reason: 'operator_hidden', demo: true, source: 'demo', start_date: '2099-01-01', end_date: '2099-01-03' });
 
-async function ingest(today, extra = []) {
-  const { url, close } = await serve(cluster);
+async function ingest(today, extra = [], on = cluster) {
+  const { url, close } = await serve(on);
   try {
     const child = spawn(process.execPath, ['scripts/ingest.mjs', '--event', SLUG, '--skip-topics', ...extra], {
       cwd: ROOT,
@@ -136,4 +136,32 @@ test('--refresh-only refreshes the demo the backend holds, and never brings back
   assert.match(removed.out, /skipped \(--refresh-only\): caddie-conferences does not hold it; add it first/);
   assert.equal(cluster.source(INDEX.conferences, SLUG), null);
   assert.equal(cluster.ids(INDEX.talks).filter((x) => x.startsWith(`${SLUG}:`)).length, 0, 'no talk is created');
+});
+
+test('--refresh-only never undoes a hide or a remove that lands while it runs', async () => {
+  // A cluster that holds the demo, as the first add leaves it.
+  const raced = new FakeES();
+  const first = await ingest('2026-11-12', [], raced);
+  assert.equal(first.status, 0, first.out);
+  const refreshes = () => raced.calls('refresh:talks').length;
+
+  // Hidden between the run's read of the document and its write.
+  raced.before('refresh:talks', refreshes() + 1, (c) => c.patch(INDEX.conferences, SLUG, { status: 'unavailable', status_reason: 'operator_hidden' }));
+  const hidden = await ingest('2026-11-13', ['--refresh-only'], raced);
+  assert.equal(hidden.status, 0, hidden.out);
+  assert.match(hidden.out, /status: unchanged \(--refresh-only\): the conference document changed during the run/);
+  assert.equal(raced.source(INDEX.conferences, SLUG).status, 'unavailable');
+  assert.equal(raced.source(INDEX.conferences, SLUG).status_reason, 'operator_hidden');
+
+  // Removed between the read of the document and the read of the talks: nothing is rebuilt.
+  raced.patch(INDEX.conferences, SLUG, { status: 'searchable', status_reason: null });
+  raced.before('search:talks', raced.calls('search:talks').length + 1, (c) => {
+    for (const id of c.ids(INDEX.talks).filter((x) => x.startsWith(`${SLUG}:`))) c.docs(INDEX.talks).delete(id);
+    c.docs(INDEX.conferences).delete(SLUG);
+  });
+  const removed = await ingest('2026-11-13', ['--refresh-only'], raced);
+  assert.equal(removed.status, 0, removed.out);
+  assert.match(removed.out, /holds none of its talks, so nothing is written/);
+  assert.equal(raced.source(INDEX.conferences, SLUG), null);
+  assert.equal(raced.ids(INDEX.talks).filter((x) => x.startsWith(`${SLUG}:`)).length, 0);
 });

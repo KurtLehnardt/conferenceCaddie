@@ -323,6 +323,9 @@ async function indexBuilt(ev, conf, built, lines) {
       lines.push(`  (index ${opts.index} not readable: ${e.message})`);
     }
   }
+  // --refresh-only never builds a conference from nothing: one whose talks are all gone (a remove
+  // that landed after the conference document was read) is left alone.
+  if (opts.refreshOnly && existing !== null && existing.size === 0) return { conf, lines, stop: false, notHeld: true };
   const plan = existing === null ? null : planOps(built.docs, existing);
 
   // The shrink guard, before anything is written for this conference. A refused run leaves the
@@ -451,20 +454,29 @@ function planOps(docs, existing) {
   return { ops, counts };
 }
 
-// The stored status of a conference ({ status, status_reason }), or null when the conferences index
-// does not hold it. Any other answer stops the run, so --refresh-only never writes on a guess.
+// The stored status of a conference ({ status, status_reason, guard }), or null when the conferences
+// index does not hold it. guard is its { seq_no, primary_term }, which the --refresh-only write is
+// conditioned on. Any other answer stops the run, so --refresh-only never writes on a guess.
 async function storedConference(slug) {
   const { status, json } = await es('GET', `/${encodeURIComponent(opts.confIndex)}/_doc/${encodeURIComponent(slug)}?_source_includes=status,status_reason`);
   if (status === 404) return null;
   if (status !== 200 || !json) fail(`Reading the conference document of ${slug} from ${opts.confIndex} failed with status ${status}: ${json?.error?.type ?? ''}`);
-  return json.found ? { status: json._source?.status ?? null, status_reason: json._source?.status_reason ?? null } : null;
+  if (!json.found) return null;
+  return { status: json._source?.status ?? null, status_reason: json._source?.status_reason ?? null, guard: { seq_no: json._seq_no, primary_term: json._primary_term } };
 }
 
-async function writeConference(conf) {
+// Writes the conference document, to data/ and, unless --dry-run, to the index. With a guard (the
+// --refresh-only run) the write succeeds only if the document is still the one read before the run:
+// a hide or a remove that landed meanwhile answers 409, and the document is then left as the
+// operator made it. Returns false in that case, true otherwise.
+async function writeConference(conf, guard = null) {
   writeJson(join(dataDir, conf.slug, 'conference.json'), conf);
-  if (opts.dryRun) return;
-  const { status, json } = await es('PUT', `/${encodeURIComponent(opts.confIndex)}/_doc/${encodeURIComponent(conf.slug)}?refresh=wait_for`, conf);
+  if (opts.dryRun) return true;
+  const condition = guard ? `&if_seq_no=${encodeURIComponent(guard.seq_no)}&if_primary_term=${encodeURIComponent(guard.primary_term)}` : '';
+  const { status, json } = await es('PUT', `/${encodeURIComponent(opts.confIndex)}/_doc/${encodeURIComponent(conf.slug)}?refresh=wait_for${condition}`, conf);
+  if (guard && status === 409) return false;
   if (status >= 300) fail(`Writing the conference document for ${conf.slug} to ${opts.confIndex} failed with status ${status}: ${json?.error?.type ?? ''}`);
+  return true;
 }
 
 // ======================= TOPICS HOOK =======================
@@ -575,14 +587,20 @@ async function main() {
   let stopped = false;
   for (const ev of selected) {
     if (stopped) { missing.push(ev.slug); continue; }
+    let guard = null;
     if (opts.refreshOnly) {
       const held = await storedConference(ev.slug);
       if (!held || (typeof held.status_reason === 'string' && held.status_reason.startsWith('operator_'))) {
         console.log(`${ev.slug}  skipped (--refresh-only): ${held ? `the backend holds it as ${held.status} (${held.status_reason}), set by the operator` : `${opts.confIndex} does not hold it; add it first (caddie-admin conferences add --event ${ev.slug})`}`);
         continue;
       }
+      guard = held.guard;
     }
     const r = await processEvent(ev);
+    if (r.notHeld) {
+      console.log(`${ev.slug}  skipped (--refresh-only): ${opts.index} holds none of its talks, so nothing is written; add it again with caddie-admin conferences add --event ${ev.slug}`);
+      continue;
+    }
     if (r.refused) refused.push(ev.slug);
     if (r.peopleFailed) peopleFailed.push(ev.slug);
     // Refused by the shrink guard: nothing is written for this conference, not even its document.
@@ -599,7 +617,12 @@ async function main() {
       r.conf.status_reason = 'operator_hidden';
       r.lines.push('  hidden by the operator (data/conference-operator.json)');
     }
-    await writeConference(r.conf);
+    if (!(await writeConference(r.conf, guard))) {
+      console.log(`${ev.slug}  ${ev.name}  ${ev.start_date}..${ev.end_date}  ${r.conf.time_zone ?? 'no time zone'}`);
+      for (const l of r.lines) console.log(l);
+      console.log(`  status: unchanged (--refresh-only): the conference document changed during the run, an operator's hide or remove, so it was not written`);
+      continue;
+    }
     console.log(`${ev.slug}  ${ev.name}  ${ev.start_date}..${ev.end_date}  ${r.conf.time_zone ?? "no time zone"}`);
     for (const l of r.lines) console.log(l);
     if (!opts.dryRun && r.conf.status === 'searchable') console.log(runTopicsHook(ev.slug));

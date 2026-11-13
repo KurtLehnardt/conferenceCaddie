@@ -1162,7 +1162,8 @@ describe('DEMO the demo conference on tier 3', () => {
     assert.equal(hide.code, 0, hide.stderr);
     assert.equal(cluster.source(INDEX.conferences, DEMO).status, 'unavailable');
     assert.equal(readJson(join(root, 'data', DEMO, 'conference.json')).demo, true, 'the generated document stands in for the missing file');
-    rmSync(join(root, 'data', DEMO), { recursive: true, force: true });
+    assert.match(hide.stdout, /commit data\/conference-operator\.json;/, 'only the operator file is committed for the demo');
+    // The hide left a generated file (unavailable, no talk file); the unhide still restores the demo.
     const unhide = await invoke(confirmed(['conferences', 'unhide', '--event', DEMO], DEMO));
     assert.equal(unhide.code, 0, unhide.stderr);
     assert.equal(cluster.source(INDEX.conferences, DEMO).status, 'searchable');

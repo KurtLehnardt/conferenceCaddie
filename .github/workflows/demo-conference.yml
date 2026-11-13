@@ -1,7 +1,8 @@
 # Keeps the demo conference current: its invented talks are always yesterday, today and tomorrow in
 # its time zone (config/demo-conference.json, scripts/lib/demo-conference.mjs), so its dates and talk
-# times change every day. It is off unless config/demo-conference.json says "enabled": true, and then
-# this workflow does nothing at all beyond reading that file and the live conferences.json.
+# times change every day. It is off unless config/demo-conference.json says "enabled": true; while it
+# is off, the workflow only reads that file and the live conferences.json and, where tier 3 is set up,
+# checks that Elasticsearch no longer lists the demo.
 #
 # Every three hours at minute 41 (the runs are idempotent, and a day's first run after midnight in
 # any zone falls before 04:00 there, ahead of the first talk at 07:00):
@@ -101,8 +102,11 @@ jobs:
           done
           echo "busy=$busy" >> "$GITHUB_OUTPUT"
 
+  # Only where tier 3 is set up (the variable exists), so other repositories never create the
+  # environment or a deployment record.
   elasticsearch:
     needs: check
+    if: vars.CADDIE_ES_URL != ''
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: demo-refresh

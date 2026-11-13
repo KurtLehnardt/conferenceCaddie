@@ -33,6 +33,7 @@ import {
   buildConferenceBundle, validateBuilt, publicConference, buildIndex, parseArgs as bundleArgs, run as buildBundles, DEMO_ATTRIBUTION, ATTRIBUTION,
 } from '../build-bundles.mjs';
 import { status, prepare, esCheck, liveEntry, outputLines, parseArgs as demoArgs } from '../demo-conference.mjs';
+import { planBuild } from '../lib/bundle-sources.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const ON = { ...DEFAULT_DEMO_CONFIG, enabled: true };
@@ -486,4 +487,13 @@ describe('hardening of the workflow steps', () => {
     assert.deepEqual(lines, []);
     await assert.rejects(esCheck({ env, fetchFn: respond(403, {}), log: () => {} }), /status 403/);
   });
+});
+
+test('the bundle plan never keeps a live demo conference from an earlier build', () => {
+  const hash = 'a'.repeat(64);
+  const live = (demo) => ({ conferences: [{ conference: { slug: SLUG, ...(demo ? { demo: true } : {}) }, bundle: { content_hash: hash } }], sources: new Map([[SLUG, { content_hash: hash, raw_fetched_at: '2099-01-01T00:00:00Z' }]]) });
+  // A record from the future would keep any other conference; a demo is dropped all the same.
+  assert.equal(planBuild({ local: new Map(), live: live(true), now: Date.parse('2099-01-01T00:00:00Z') }).get(SLUG).action, 'drop');
+  assert.equal(planBuild({ local: new Map([[SLUG, { status: 'searchable', raw_fetched_at: null }]]), live: live(true) }).get(SLUG).action, 'build');
+  assert.equal(planBuild({ local: new Map(), live: live(false), now: Date.parse('2099-01-01T00:00:00Z') }).get(SLUG).action, 'keep', 'a real conference is still kept');
 });

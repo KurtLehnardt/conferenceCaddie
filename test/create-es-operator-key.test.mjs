@@ -164,7 +164,7 @@ const DEMO_ROLE_INDICES = [
   { names: ['caddie-conferences*'], privileges: ['read', 'index'] },
 ];
 
-test('--demo mints read, write and maintenance on the talks and conferences only, into a 0600 file, and prints no key', async () => {
+test('--demo mints read, index and maintenance on the talks and read and index on the conferences, into a 0600 file, and prints no key', async () => {
   const s = await stub();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caddie-demokey-'));
   const file = path.join(dir, 'es-demo-key');

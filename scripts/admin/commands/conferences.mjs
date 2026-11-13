@@ -101,7 +101,8 @@ function generatedDemo(root, slug) {
 
 export function withConferenceFiles(adapter, { root, now = () => new Date(), tier = 3 } = {}) {
   const rel = (path) => relative(root, path);
-  const files = (slug) => [rel(confPath(root, slug)), OPERATOR_FILE];
+  // The demo's conference file is generated and git-ignored, so only the operator file is committed.
+  const files = (slug) => (generatedDemo(root, slug) ? [OPERATOR_FILE] : [rel(confPath(root, slug)), OPERATOR_FILE]);
 
   // The refusal of a removed slug, exit 2; under --dry-run it is the preview of that refusal.
   const removedError = (slug, mode) => new UsageError(`${mode === 'dry-run' ? 'would refuse: ' : ''}${slug} is removed (data/conference-operator.json); run conferences unretire --event ${slug} first`);
@@ -125,7 +126,8 @@ export function withConferenceFiles(adapter, { root, now = () => new Date(), tie
     },
 
     async hideConference({ event, slug, reason, mode }) {
-      const local = readConference(root, slug) ?? generatedDemo(root, slug);
+      // The demo's document is always the generator's: its local file is generated and git-ignored.
+      const local = generatedDemo(root, slug) ?? readConference(root, slug);
       if (!local) throw new NotFoundError(`no ${rel(confPath(root, slug))}; run conferences refresh --event ${slug} first`);
       const operator = readOperatorFile(root);
       if (operator.removed[slug]) throw removedError(slug, mode);
@@ -145,9 +147,8 @@ export function withConferenceFiles(adapter, { root, now = () => new Date(), tie
     },
 
     async unhideConference({ event, slug, mode }) {
-      const stored = readConference(root, slug);
-      const generated = stored ? null : generatedDemo(root, slug);
-      const local = stored ?? generated;
+      const generated = generatedDemo(root, slug);
+      const local = generated ?? readConference(root, slug);
       const operator = readOperatorFile(root);
       if (!local && !operator.hidden[slug]) throw new NotFoundError(`${slug} is not hidden (no ${OPERATOR_FILE} entry and no ${rel(confPath(root, slug))})`);
       const since = now().toISOString();
