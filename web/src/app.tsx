@@ -38,19 +38,15 @@ import { SettingsScreen } from './components/settings';
 import { InstallCard, offerInstallOnce } from './components/install';
 import { SwitcherButton, SwitcherSheet } from './components/switcher';
 import { TalkCard } from './components/talk';
-import { DemoNote, DemoPill, demoName, isDemo } from './components/demo';
+import { DEMO_HEADING_SUFFIX, DemoNote, DemoPill, demoName, isDemo } from './components/demo';
 import {
-  BlockedPeople,
   ForYouScreen,
   InboxScreen,
   MeetScreen,
-  NudgeSetting,
-  NudgeSettings,
-  PeopleIMet,
-  PeopleIWatch,
   PeopleScreen,
   ProfileButton,
   ProfileScreen,
+  SettingsPeopleGroups,
   onInterestedChanged,
   registerPeopleUi,
   resyncPush,
@@ -95,7 +91,14 @@ function TalkSheet({
   if (!talk) return null;
   return (
     <div class="scrim" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div class="sheet" role="dialog" aria-modal="true" aria-label={talk.title} ref={ref} tabIndex={-1}>
+      <div
+        class="sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-label={isDemo(conference) ? talk.title + DEMO_HEADING_SUFFIX : talk.title}
+        ref={ref}
+        tabIndex={-1}
+      >
         <div class="sheet-handle" aria-hidden="true" />
         <header class="sheet-header">
           <h2>Talk</h2>
@@ -642,7 +645,7 @@ export function App() {
                 setToast(null);
                 setImportOpen(true);
               }}
-              people={searchable ? <><BlockedPeople conference={searchable} /><PeopleIMet conference={searchable} /><PeopleIWatch conference={searchable} /><NudgeSetting conference={searchable} /><NudgeSettings conference={searchable} /></> : null}
+              people={searchable ? <SettingsPeopleGroups conference={searchable} /> : null}
             />
           ) : !searchable ? (
             blocker()

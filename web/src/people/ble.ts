@@ -14,7 +14,7 @@ import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor
 import { useEffect, useState } from 'preact/hooks';
 import { isAbort, PeopleApiError, postSightings, putPresenceBle, rotateBleToken, type BleToken, type NearbyPerson, type Sighting } from './api';
 import { keepUntilOffered } from './capabilities';
-import { demoTitle, isDemo } from '../components/demo';
+import { demoBody, demoTitle, isDemo } from '../components/demo';
 import { loadConferences } from '../lib/storage';
 import { isPresenceNotActive, lastPositionFix, presenceWrite, writeWhileOn } from './presence';
 import { getPresence, isBlocked, notify, usePeopleStore } from './storage';
@@ -26,12 +26,19 @@ export const BLE_NOTICE =
   "Your phone broadcasts a random code that changes every 10 minutes and listens for others. Nothing about you is sent over Bluetooth; the code means something only to our server, only while you're around. Only people who also turned this on can be found, and you're told only about strong matches within a few metres.";
 export const NEARBY_TITLE = 'Conference Caddie';
 
-/**
- * The notification title for a conference: "Conference Caddie", or "Conference Caddie · Demo
- * conference" for a demo conference, read from the conference list kept on this device.
- */
+/** Whether [slug] is a demo conference, by the conference list kept on this device. */
+function isDemoSlug(slug: string): boolean {
+  return isDemo(loadConferences()?.find((c) => c.slug === slug));
+}
+
+/** The notification title for a conference: "Conference Caddie", or "Conference Caddie (Demo)" for a demo conference. */
 export function nearbyTitle(slug: string): string {
-  return demoTitle(NEARBY_TITLE, isDemo(loadConferences()?.find((c) => c.slug === slug)));
+  return demoTitle(NEARBY_TITLE, isDemoSlug(slug));
+}
+
+/** The notification body for a conference: [nearbyText], after "Demo: " for a demo conference. */
+export function nearbyBody(slug: string, evidence: string): string {
+  return demoBody(nearbyText(evidence), isDemoSlug(slug));
 }
 
 /** The notification body, word for word. */
@@ -318,7 +325,7 @@ async function onSightings(slug: string, sightings: Sighting[]): Promise<void> {
     if (!evidence) continue;
     recordNudge(slug, p.ref);
     try {
-      await CaddieBle.notify({ title: nearbyTitle(slug), body: nearbyText(evidence), data: `${slug}|${p.ref}` });
+      await CaddieBle.notify({ title: nearbyTitle(slug), body: nearbyBody(slug, evidence), data: `${slug}|${p.ref}` });
     } catch {
       // Notifications are off for the app; the Around now list still shows them.
     }

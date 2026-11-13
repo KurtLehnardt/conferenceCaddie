@@ -4,7 +4,7 @@ import { CalendarDays, Clock, ExternalLink, MapPin, Presentation, Star, WifiOff 
 import { getRelated, isAbort } from '../api';
 import type { Conference, Talk } from '../types';
 import { Evidence } from '../lib/evidence';
-import { demoPillFor } from './demo';
+import { demoHeadingSuffix, demoPillFor } from './demo';
 import { formatWhen, hasEnded, zoneOf } from '../lib/time';
 import { TalkPeopleControls } from '../people/index';
 import { useOnline } from '../offline/status';
@@ -121,7 +121,10 @@ export function TalkCard({
           <CalendarDays size={14} aria-hidden="true" />
           Event or showcase, not a talk
         </p>
-        <Heading class="card-title">{talk.title}</Heading>
+        <Heading class="card-title">
+          {talk.title}
+          {demoHeadingSuffix(conference)}
+        </Heading>
         <p class="card-meta">
           <span class="meta-item">
             <Clock size={16} aria-hidden="true" />
@@ -162,7 +165,11 @@ export function TalkCard({
   return (
     <article class="card">
       {demoRow}
-      <Heading class="card-title">{talk.title}</Heading>
+      {/* The pill sits above the heading, so the heading says it too for those who move by headings. */}
+      <Heading class="card-title">
+        {talk.title}
+        {demoHeadingSuffix(conference)}
+      </Heading>
       {talk.speakers.length > 0 && <p class="card-speakers">{talk.speakers.join(', ')}</p>}
       <p class="card-meta">
         <span class="meta-item">

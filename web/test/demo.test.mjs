@@ -1,19 +1,19 @@
 // The Demo label of a demo conference (web/src/components/demo.ts): which conference entries count
-// as a demo, the pill's markup and words, and the note at the top of the people screens.
+// as a demo, the words of the label and of notifications, and the pill and the note as the screens
+// draw them (rendered with Preact into the small DOM of dom.mjs).
 //
-// Run with `npm --prefix web test`. The screens that show the pill are JSX, which node --test
-// cannot load, so the pill and the note are tested here as elements, and a check on the screens'
-// sources makes sure each still shows them. The parity screenshots cover them in a browser.
+// Run with `npm --prefix web test`. The parity screenshots cover the screens in a browser.
 import './env.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { byClass, byTag, draw, spokenText, visibleText } from './dom.mjs';
 import {
   DEMO_LABEL,
   DEMO_NOTE,
   DEMO_SPOKEN,
   DemoNote,
   DemoPill,
+  demoBody,
   demoName,
   demoNoteFor,
   demoPill,
@@ -55,14 +55,17 @@ test('demoName adds "(Demo)" for a demo conference only', () => {
   assert.equal(demoName('Sample Cloud Summit', false), 'Sample Cloud Summit');
 });
 
-test('a notification of a demo conference says so in its title', () => {
-  assert.equal(demoTitle('Conference Caddie', true), 'Conference Caddie · Demo conference');
+test('a notification of a demo conference is titled "Conference Caddie (Demo)" and its body starts with "Demo: "', () => {
+  assert.equal(demoTitle('Conference Caddie', true), 'Conference Caddie (Demo)');
   assert.equal(demoTitle('Conference Caddie', false), 'Conference Caddie');
+  assert.equal(demoTitle('Conference Caddie', true), demoName('Conference Caddie', true), 'one rule for names and titles');
+  assert.equal(demoBody('Someone is near you', true), 'Demo: Someone is near you');
+  assert.equal(demoBody('Someone is near you', false), 'Someone is near you');
 });
 
-test('the Bluetooth nudge of a demo conference is titled "Conference Caddie · Demo conference"', async () => {
+test('the Bluetooth nudge of a demo conference follows the notification rule', async () => {
   // A copy of ble.ts of its own (the query), with the conference list kept on this device.
-  const { nearbyTitle, NEARBY_TITLE } = await import('../src/people/ble.ts?demo-title');
+  const { nearbyBody, nearbyText, nearbyTitle, NEARBY_TITLE } = await import('../src/people/ble.ts?demo-title');
   storeConferences([
     { ...REAL, slug: 'real-2099' },
     { ...DEMO, slug: 'demo-2099' },
@@ -70,8 +73,10 @@ test('the Bluetooth nudge of a demo conference is titled "Conference Caddie · D
   ]);
   try {
     assert.equal(NEARBY_TITLE, 'Conference Caddie');
-    assert.equal(nearbyTitle('demo-2099'), 'Conference Caddie · Demo conference');
+    assert.equal(nearbyTitle('demo-2099'), 'Conference Caddie (Demo)');
+    assert.equal(nearbyBody('demo-2099', 'eBPF'), `Demo: ${nearbyText('eBPF')}`);
     assert.equal(nearbyTitle('real-2099'), 'Conference Caddie');
+    assert.equal(nearbyBody('real-2099', 'eBPF'), nearbyText('eBPF'));
     assert.equal(nearbyTitle('odd-2099'), 'Conference Caddie');
     assert.equal(nearbyTitle('unknown-2099'), 'Conference Caddie');
   } finally {
@@ -147,27 +152,155 @@ test('the pill and the note show for a demo conference and for nothing else', ()
   assert.equal(DemoNote({ conference: REAL }), null);
 });
 
-test('every surface of a demo conference still shows the pill or the note', () => {
-  const src = (path) => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8');
-  // The app bar: after the conference name, and after the titles of Profile, Requests and Meet up.
-  const app = src('app.tsx');
-  assert.match(app, /<SwitcherButton[\s\S]*?demo=\{demo\}/);
-  for (const title of ['Profile', 'Requests', 'Meet up']) {
-    assert.match(app, new RegExp(`${title}\\s*<DemoPill demo=\\{demo\\} />`), `${title} has the pill`);
+// --- Rendered ----------------------------------------------------------------------------------
+
+/** A conference entry of GET /api/conferences, a demo one when [demo]. */
+function conference(demo, extra = {}) {
+  return {
+    slug: demo ? 'caddie-demo-conference' : 'sample-cloud-summit-2026',
+    name: demo ? 'Caddie Demo Conference' : 'Sample Cloud Summit',
+    start_date: '2026-11-11',
+    end_date: '2026-11-13',
+    time_zone: 'UTC',
+    location: { city: 'Demo City', region: '', country: '', virtual: false },
+    status: 'searchable',
+    official_schedule_url: demo ? null : 'https://example.invalid/schedule/',
+    source: demo ? 'demo' : 'sessionize',
+    has_level: false,
+    track_group: 'Track',
+    tag_groups: [],
+    talk_count: 1,
+    ...(demo ? { demo: true } : {}),
+    ...extra,
+  };
+}
+
+/** A talk of [c], without an official page when [url] is null. */
+function talkOf(c, url, kind = 'talk') {
+  return {
+    talk_id: `${c.slug}:1`,
+    conference: c.slug,
+    title: 'Kubernetes upgrades without the drama',
+    speakers: ['Ada Inventa'],
+    room: 'Demo Hall',
+    start: '2026-11-12T09:00:00+00:00',
+    end: '2026-11-12T09:30:00+00:00',
+    track: 'Demo Track',
+    level: null,
+    tags: [],
+    slides_url: null,
+    url,
+    kind,
+  };
+}
+
+const links = (root) => byTag(root, 'a').map((a) => visibleText(a).trim());
+
+test('the pill and the note render with their words, read as on the native apps', () => {
+  const pill = draw(DemoPill, { demo: true });
+  try {
+    const [span] = byClass(pill.root, 'demo-pill');
+    assert.equal(visibleText(span), 'Demo');
+    assert.equal(spokenText(span), DEMO_SPOKEN, 'screen readers hear the full words, not "Demo"');
+    assert.equal(span.getAttribute('title'), DEMO_SPOKEN);
+  } finally {
+    pill.unmount();
   }
-  // Every conference screen opens with the note, before the Search and Schedule switch.
-  const note = app.indexOf('<DemoNote conference={searchable} />');
-  assert.ok(note > app.indexOf(') : !searchable ? ('), 'the note is in the screens of a searchable conference');
-  assert.ok(note < app.indexOf('class="view-switch"'), 'the note is above the Search and Schedule switch');
-  assert.match(app, /demoName\(conference\.name, isDemo\(conference\)\)/);
-  // The switcher's rows and button.
-  const switcher = src('components/switcher.tsx');
-  assert.equal((switcher.match(/\{demoPillFor\(c\)\}/g) ?? []).length, 2);
-  assert.match(switcher, /<DemoPill demo=\{demo\} \/>/);
-  // Full talk cards, both kinds, carry the pill above the title.
-  const talk = src('components/talk.tsx');
-  assert.match(talk, /const demo = demoPillFor\(conference\);/);
-  assert.equal((talk.match(/\{demoRow\}/g) ?? []).length, 2);
-  // Both pages of Import my schedule open with the note.
-  assert.equal((src('components/import.tsx').match(/<DemoNote conference=\{conference\} \/>/g) ?? []).length, 2);
+  const note = draw(DemoNote, { conference: DEMO });
+  try {
+    const [p] = byClass(note.root, 'demo-note');
+    assert.equal(byClass(p, 'demo-pill').length, 1);
+    assert.equal(visibleText(p), `Demo${DEMO_NOTE}`);
+  } finally {
+    note.unmount();
+  }
+  for (const c of [REAL, { ...REAL, demo: 'true' }, null]) {
+    const none = draw(DemoNote, { conference: c });
+    assert.equal(none.root.childNodes.length, 0, `no note for ${JSON.stringify(c)}`);
+    none.unmount();
+  }
+});
+
+test('a demo talk card shows the pill, says Demo in its heading and links nowhere without a URL', async () => {
+  const { TalkCard } = await import('../src/components/talk.tsx');
+  const demo = conference(true);
+  const card = draw(TalkCard, { talk: talkOf(demo, null), conference: demo, interested: false, onToggleInterested: () => {} });
+  try {
+    const [article] = byTag(card.root, 'article');
+    assert.ok(article.firstChild.classes.includes('card-demo'), 'the pill row comes first');
+    assert.equal(byClass(article.firstChild, 'demo-pill').length, 1);
+    const [heading] = byTag(article, 'h3');
+    assert.equal(visibleText(heading), 'Kubernetes upgrades without the drama');
+    assert.equal(spokenText(heading), 'Kubernetes upgrades without the drama, Demo conference');
+    assert.ok(!links(card.root).includes('Add to my schedule on the official site'), 'no official link without a URL');
+  } finally {
+    card.unmount();
+  }
+
+  const event = draw(TalkCard, { talk: talkOf(demo, null, 'ambient'), conference: demo, interested: false, onToggleInterested: () => {} });
+  try {
+    assert.equal(byClass(event.root, 'demo-pill').length, 1);
+    assert.ok(!links(event.root).includes('Details on the official site'));
+  } finally {
+    event.unmount();
+  }
+
+  const real = conference(false);
+  const plain = draw(TalkCard, { talk: talkOf(real, 'https://example.invalid/talk/1'), conference: real, interested: false, onToggleInterested: () => {} });
+  try {
+    assert.equal(byClass(plain.root, 'demo-pill').length, 0, 'a real conference has no pill');
+    assert.equal(spokenText(byTag(plain.root, 'h3')[0]), 'Kubernetes upgrades without the drama');
+    assert.ok(links(plain.root).includes('Add to my schedule on the official site'));
+  } finally {
+    plain.unmount();
+  }
+});
+
+test('the switcher names the demo conference with the pill and lists it without a link when it has no schedule page', async () => {
+  const { SwitcherButton, SwitcherSheet } = await import('../src/components/switcher.tsx');
+  const button = draw(SwitcherButton, { name: 'Caddie Demo Conference', demo: true, onOpen: () => {} });
+  try {
+    assert.equal(spokenText(byTag(button.root, 'button')[0]), `Caddie Demo Conference${DEMO_SPOKEN}, change conference`);
+  } finally {
+    button.unmount();
+  }
+
+  const conferences = [
+    conference(false),
+    conference(true),
+    conference(true, { slug: 'old-demo', name: 'Old Demo', status: 'unavailable' }),
+    conference(false, { slug: 'old-real', name: 'Old Real', status: 'unavailable' }),
+  ];
+  const sheet = draw(SwitcherSheet, { open: true, conferences, current: 'caddie-demo-conference', error: null, onPick: () => {}, onClose: () => {} });
+  try {
+    const row = (name) => byClass(sheet.root, 'conf-row').find((r) => byClass(r, 'conf-name').some((n) => visibleText(n) === name));
+    assert.equal(byClass(row('Caddie Demo Conference'), 'demo-pill').length, 1);
+    assert.equal(byClass(row('Sample Cloud Summit'), 'demo-pill').length, 0);
+    const old = row('Old Demo');
+    assert.equal(old.localName, 'div', 'no link without an official schedule page');
+    assert.ok(old.classes.includes('conf-row-static'));
+    assert.equal(byClass(old, 'demo-pill').length, 1);
+    assert.equal(row('Old Real').localName, 'a');
+    assert.equal(row('Old Real').getAttribute('href'), 'https://example.invalid/schedule/');
+  } finally {
+    sheet.unmount();
+  }
+});
+
+test("Settings' people groups of a demo conference open with the note", async () => {
+  const { SettingsPeopleGroups } = await import('../src/people/SettingsGroups.tsx');
+  const demo = draw(SettingsPeopleGroups, { conference: conference(true) });
+  try {
+    assert.ok(demo.root.firstChild.classes.includes('demo-note'), 'the note comes before the groups');
+    assert.ok(demo.root.childNodes.length > 1, 'the groups follow it');
+  } finally {
+    demo.unmount();
+  }
+  const real = draw(SettingsPeopleGroups, { conference: conference(false) });
+  try {
+    assert.equal(byClass(real.root, 'demo-note').length, 0);
+  } finally {
+    real.unmount();
+  }
+  localStorage.clear();
 });

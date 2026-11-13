@@ -4,6 +4,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { ChevronRight, ExternalLink, Sparkles, Star } from 'lucide-preact';
 import { fetchRecommendations, isAbort, PeopleApiError, type RecommendationBody } from './api';
 import { getProfile, hasProfileInput, topicsFor, usePeopleStore } from './storage';
+import { demoHeadingSuffix, demoPillFor } from '../components/demo';
 import { TalkPeopleControls } from './TalkPeopleControls';
 import type { ConferenceLike, InterestedProp, Recommendation, TalkLike } from './types';
 import { formatWhen, interestedIds, Marked, useVisibleTick } from './util';
@@ -261,9 +262,15 @@ export function ForYouScreen({
         <div class={`pp-list${view.refreshing ? ' is-refreshing' : ''}`} aria-busy={view.refreshing}>
           {state.results.map((rec) => {
             const on = marked.has(rec.talk_id);
+            // A demo conference's talk carries the Demo pill at the top, as a talk card does.
+            const demo = demoPillFor(conference);
             return (
               <article key={rec.talk_id} class="pp-talk-card">
-                <h3 class="pp-talk-title">{rec.title}</h3>
+                {demo && <p class="card-demo">{demo}</p>}
+                <h3 class="pp-talk-title">
+                  {rec.title}
+                  {demoHeadingSuffix(conference)}
+                </h3>
                 {rec.speakers?.length > 0 && <p class="pp-talk-speakers">{rec.speakers.join(', ')}</p>}
                 <p class="pp-talk-meta">
                   {formatWhen(conference, rec.start)}
