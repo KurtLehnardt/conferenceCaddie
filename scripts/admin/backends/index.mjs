@@ -52,11 +52,12 @@ export const ADAPTER_METHODS = {
 
 // `credential` is the admin key (tier 3) or admin token (tier 2). It is used only to sign or
 // authorize requests and is never returned, printed or logged. `env` is the process environment
-// (index names, CADDIE_ADMIN_ROOT); `spawn`, `fetch`, `now` and `trackSend` (tier 2: whether an
-// attempt was written to a socket) are injectable for the tests.
-export function createAdapter(backend, { credential, env = {}, spawn, fetch, now = () => new Date(), trackSend } = {}) {
+// (index names, CADDIE_ADMIN_ROOT); `spawn`, `fetch`, `now`, `trackSend` (tier 2: whether an
+// attempt was written to a socket) and `sleep` (tier 3: the wait of a demo conference's hide) are
+// injectable for the tests.
+export function createAdapter(backend, { credential, env = {}, spawn, fetch, now = () => new Date(), trackSend, sleep } = {}) {
   const root = adminRoot(env);
-  const deps = { credential, env, spawn, fetch, root, now, trackSend };
+  const deps = { credential, env, spawn, fetch, root, now, trackSend, ...(sleep ? { sleep } : {}) };
   let tier;
   if (backend.tier === 3) tier = createEsAdapter(backend, deps);
   else if (backend.tier === 2) tier = createWorkerAdapter(backend, deps);

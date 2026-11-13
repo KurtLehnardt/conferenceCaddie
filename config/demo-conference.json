@@ -1,0 +1,8 @@
+{
+  "$comment": "The demo conference: invented talks and speakers for yesterday, today and tomorrow in time_zone, labelled Demo everywhere. Off unless enabled is true. See docs/ADMIN_CLI.md, The demo conference.",
+  "enabled": false,
+  "slug": "caddie-demo-conference",
+  "name": "Caddie Demo Conference",
+  "time_zone": "America/Denver",
+  "location": { "city": "Demo City", "region": "", "country": "", "virtual": false }
+}

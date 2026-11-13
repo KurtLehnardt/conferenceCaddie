@@ -492,6 +492,8 @@ export async function main(argv, deps = {}) {
     fetch: deps.fetch ?? ((...args) => globalThis.fetch(...args)),
     // Tier 2's probe of whether an attempt was written to a socket; the tests inject one.
     trackSend: deps.trackSend,
+    // The wait between the two sweeps of a demo conference's hide on tier 3; the tests inject one.
+    sleep: deps.sleep,
   };
   const json = argv.includes('--json');
   const secrets = [];
@@ -615,7 +617,7 @@ async function run(argv, ctx) {
       isTTY: d.isTTY,
       prompt: d.prompt,
     });
-    const adapter = d.createAdapter(backend, { credential, env, spawn: d.spawn, fetch: d.fetch, now: d.now, ...(d.trackSend ? { trackSend: d.trackSend } : {}) });
+    const adapter = d.createAdapter(backend, { credential, env, spawn: d.spawn, fetch: d.fetch, now: d.now, ...(d.trackSend ? { trackSend: d.trackSend } : {}), ...(d.sleep ? { sleep: d.sleep } : {}) });
     const result = redactDeep((await adapter[command.method]({ ...args, mode })) ?? {}, redact);
     const warnings = Array.isArray(result.warnings) ? result.warnings : [];
     writeAudit({ mode, result: warnings.length ? 'warned' : 'ok', note: result.note, counts: warnings.length ? { ...(result.counts ?? {}), warnings: warnings.length } : result.counts });

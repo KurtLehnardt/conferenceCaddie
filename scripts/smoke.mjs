@@ -834,9 +834,11 @@ if (TALKS_FROM === 'data') {
   console.log(`NOTE talks: the expected talks come from the published bundles at ${new URL(BUNDLE_BASE).origin}${loaded.length ? `: ${loaded.join(', ')}` : ''} (SMOKE_TALKS=data uses the committed data/)`);
   await check('bun1: the published talk bundles list the Worker\'s searchable conferences with the same talk counts', async () => {
     if (!published) throw new Error(bundleTalks.get(PRIMARY)?.error ?? 'the published index could not be read');
-    const bundled = new Map(published.conferences.filter((c) => c.bundle).map((c) => [c.conference.slug, c.bundle.talk_count]));
+    // The demo conference (demo: true, invented data, regenerated daily on each side) is left out:
+    // this check spans conferences.
+    const bundled = new Map(published.conferences.filter((c) => c.bundle && c.conference.demo !== true).map((c) => [c.conference.slug, c.bundle.talk_count]));
     const problems = [];
-    for (const c of conferences.filter((x) => x.status === 'searchable')) {
+    for (const c of conferences.filter((x) => x.status === 'searchable' && x.demo !== true)) {
       if (!bundled.has(c.slug)) problems.push(`${c.slug} has no published bundle`);
       else if (bundled.get(c.slug) !== c.talk_count) problems.push(`${c.slug}: the Worker has ${c.talk_count} talks, the bundle ${bundled.get(c.slug)}`);
     }

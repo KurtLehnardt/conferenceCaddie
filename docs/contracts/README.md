@@ -5,7 +5,7 @@ These four contracts are the plug between the native apps and every deployment t
 | Contract | Spec | Schema | Fixtures | Reference implementation |
 |---|---|---|---|---|
 | Capabilities v1 | [capabilities.md](capabilities.md) | `contracts/schema/capabilities.v1.schema.json` | `contracts/fixtures/capabilities/` | `contracts/js/capabilities.mjs` |
-| Talk bundle v1 | [talk-bundle.md](talk-bundle.md) | `contracts/schema/talk-bundle.v1.schema.json`, `contracts/schema/conferences-index.v1.schema.json`, `contracts/schema/embedding-reference.v1.schema.json` | `contracts/fixtures/bundle/` (built from `contracts/fixtures/bundle-inputs/`), `contracts/fixtures/embedding/reference.v1.json` | `contracts/js/bundle.mjs`, `contracts/js/canonical-json.mjs` |
+| Talk bundle v1 | [talk-bundle.md](talk-bundle.md) | `contracts/schema/talk-bundle.v1.schema.json`, `contracts/schema/conferences-index.v1.schema.json`, `contracts/schema/embedding-reference.v1.schema.json` | `contracts/fixtures/bundle/` (built from `contracts/fixtures/bundle-inputs/`), `contracts/fixtures/demo/` (the demo marker), `contracts/fixtures/embedding/reference.v1.json` | `contracts/js/bundle.mjs`, `contracts/js/canonical-json.mjs` |
 | People API v1 | [people-api.md](people-api.md) | `contracts/schema/people-api.v1.schema.json`, route table `contracts/routes/people-api.v1.json` | `contracts/fixtures/people-api/` | today's `server/` (all 26 routes checked by `test/contracts-people-conformance.test.mjs`) |
 | Bluetooth derived tokens v1 | [ble-tokens.md](ble-tokens.md) | `contracts/schema/ble-fixtures.v1.schema.json` (the vector files) | `contracts/fixtures/ble/` | `contracts/js/ble-token.mjs` |
 

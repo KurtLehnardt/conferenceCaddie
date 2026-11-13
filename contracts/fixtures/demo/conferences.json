@@ -1,0 +1,40 @@
+{
+  "index_version": 1,
+  "generated_at": "2099-03-02T12:00:00Z",
+  "publisher": { "name": "Caddie fixture publisher", "takedown": "https://example.org/caddie-fixture/takedown" },
+  "conferences": [
+    {
+      "slug": "caddie-demo-conference",
+      "name": "Caddie Demo Conference",
+      "start_date": "2099-03-01",
+      "end_date": "2099-03-03",
+      "time_zone": "America/Denver",
+      "location": { "city": "Demo City", "region": "", "country": "", "virtual": false },
+      "status": "searchable",
+      "official_schedule_url": null,
+      "source": "demo",
+      "has_level": true,
+      "track_group": "Track",
+      "tag_groups": ["Format"],
+      "talk_count": 105,
+      "demo": true,
+      "bundle": null
+    },
+    {
+      "slug": "caddie-fixture-2099",
+      "name": "Caddie Fixture Conference",
+      "start_date": "2099-03-02",
+      "end_date": "2099-03-03",
+      "time_zone": "Europe/Paris",
+      "location": { "city": "Lyon", "region": "", "country": "France", "virtual": false },
+      "status": "searchable",
+      "official_schedule_url": "https://example.org/caddie-fixture/schedule",
+      "source": "sessionize",
+      "has_level": false,
+      "track_group": "Track",
+      "tag_groups": [],
+      "talk_count": 3,
+      "bundle": null
+    }
+  ]
+}

@@ -64,6 +64,9 @@ const PUSHES_PER_HOUR = 3;
 const HOUR_MS = 60 * 60_000;
 const TTL_SECONDS = 600;
 const TITLE = 'Conference Caddie';
+// The demo conference (invented data) labels its pushes, so one is never taken for a real
+// conference's: the title, and the first word of the body.
+export const DEMO_TITLE = 'Conference Caddie (Demo)';
 // How long one Web Push request's socket may stay idle before the request is abandoned: web-push's
 // timeout option, which it passes to https.request. The Worker's PUSH_TIMEOUT_MS is the same
 // number but a total timeout (AbortSignal.timeout), so a push service that keeps sending a byte
@@ -138,7 +141,7 @@ function passageOf(evidence, source, labels) {
   return topic ? labels.get(topic) : null;
 }
 
-const body = (passage, zone) => `Someone who's worked on ${passage} is in ${zone} right now`;
+const body = (passage, zone, demo = false) => `${demo ? 'Demo: s' : 'S'}omeone who's worked on ${passage} is in ${zone} right now`;
 
 // How many nudges this person received in the last hour.
 async function recentCount(eventId, profileId, nowMs) {
@@ -154,12 +157,12 @@ async function recentCount(eventId, profileId, nowMs) {
 // registration APNs or FCM reports gone is deleted only while it is unchanged since it was read
 // (its guard), so a token the device registered while the push was out stays; the ids of both are
 // returned so the caller stops using them. nativePush is the native push channel (NATIVE_PUSH).
-async function pushTo(send, nativePush, subs, payload) {
+async function pushTo(send, nativePush, subs, payload, { demo = false } = {}) {
   const data = JSON.stringify(payload);
   const gone = [];
   for (const s of subs) {
     if (s.native) {
-      if ((await nativePush.send(s.native, { ttl: TTL_SECONDS })) === 'gone') {
+      if ((await nativePush.send(s.native, demo ? { ttl: TTL_SECONDS, demo: true } : { ttl: TTL_SECONDS })) === 'gone') {
         gone.push(s.id);
         if (s.guard) await deleteRegistrationIfUnchanged(s.id, s.guard).catch(() => undefined);
       }
@@ -255,9 +258,11 @@ export async function nudgeAfterPresence(me, conf, { pause = pairPause, now = ()
       for (const id of receivers) counts.set(id, (counts.get(id) ?? 0) + 1);
       const toMe = receivers.includes(me.profile_id);
       const toThem = receivers.includes(them.profile_id);
-      if (toMe) drop(await pushTo(send, nativePush, subsOf(me.profile_id), { title: TITLE, body: body(theirPassage, zone), data: { url } }));
+      const demo = conf.demo === true;
+      const title = demo ? DEMO_TITLE : TITLE;
+      if (toMe) drop(await pushTo(send, nativePush, subsOf(me.profile_id), { title, body: body(theirPassage, zone, demo), data: { url } }, { demo }));
       if (toMe && toThem) await pause();
-      if (toThem) drop(await pushTo(send, nativePush, subsOf(them.profile_id), { title: TITLE, body: body(myPassage, zone), data: { url } }));
+      if (toThem) drop(await pushTo(send, nativePush, subsOf(them.profile_id), { title, body: body(myPassage, zone, demo), data: { url } }, { demo }));
     }
   } catch (err) {
     console.error(`Nudge after presence failed: ${err instanceof UpstreamError ? err.message : (err?.name ?? 'error')}`);

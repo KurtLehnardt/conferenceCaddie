@@ -19,6 +19,16 @@
 // a secret) is printed so you can find it. This mode needs no GC_PROJECT and no gcloud. It refuses
 // to overwrite an existing file.
 //
+// --demo mints the key of the demo conference's scheduled refresh (.github/workflows/demo-conference.yml,
+// which runs scripts/ingest.mjs --event <demo slug> --skip-topics --refresh-only) and writes it to a
+// file the same way (default <config dir>/es-demo-key; --out changes the path; --expiration as above,
+// default 90d). It holds read, index (which writes and updates documents but never deletes them) and
+// maintenance (the ingest's _refresh) on caddie-talks*, and read and index on caddie-conferences*:
+// no delete, no people index, no topics or facets index, no cluster privilege. The operator stores it
+// as the secret CADDIE_DEMO_ES_API_KEY of the GitHub environment demo-refresh, which only main may
+// use, and deletes the file. A leak of it could overwrite talk and conference documents (and so hide
+// or change a real conference), never delete one, and never read or change anyone's profile.
+//
 // --only caddie-es-readonly (or caddie-es-people) re-mints just that key; the other is only
 // verified.
 //
@@ -47,8 +57,13 @@ import { dirname, join } from 'node:path';
 
 import { esUrlOrExit } from './lib/es-url.mjs';
 const OPERATOR_MODE = process.argv.includes('--operator');
+const DEMO_MODE = process.argv.includes('--demo');
+if (OPERATOR_MODE && DEMO_MODE) {
+  console.error('Choose one of --operator and --demo.');
+  process.exit(1);
+}
 const PROJECT = process.env.GC_PROJECT;
-if (!PROJECT && !OPERATOR_MODE) {
+if (!PROJECT && !OPERATOR_MODE && !DEMO_MODE) {
   console.error('Set GC_PROJECT to your Google Cloud project id.');
   process.exit(1);
 }
@@ -98,6 +113,19 @@ const OPERATOR = {
   indices: [
     { names: ['caddie-*'], privileges: ['read', 'write', 'view_index_metadata', 'monitor', 'maintenance'] },
     { names: ['caddie-topicwork-*'], privileges: ['create_index', 'delete_index'] },
+  ],
+};
+
+// The demo conference's refresh key (--demo). Cluster privileges: none. index rather than write, so
+// it can never delete: the refresh only updates the demo's talks in place and rewrites its document.
+const DEMO = {
+  user: 'caddie-demo-svc',
+  role: 'caddie_demo_ingest',
+  name: 'caddie-demo-ingest',
+  cluster: [],
+  indices: [
+    { names: ['caddie-talks*'], privileges: ['read', 'index', 'maintenance'] },
+    { names: ['caddie-conferences*'], privileges: ['read', 'index'] },
   ],
 };
 
@@ -181,13 +209,16 @@ function argValue(flag) {
   return i === -1 ? null : process.argv[i + 1];
 }
 
+const configDir = () => process.env.CADDIE_ADMIN_HOME || join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'conference-caddie');
+
 function operatorFile() {
   const out = argValue('--out');
   if (out) return out;
   if (process.env.ES_ADMIN_KEY_FILE) return process.env.ES_ADMIN_KEY_FILE;
-  const base = process.env.CADDIE_ADMIN_HOME || join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'conference-caddie');
-  return join(base, 'es-admin-key');
+  return join(configDir(), 'es-admin-key');
 }
+
+const demoFile = () => argValue('--out') || join(configDir(), 'es-demo-key');
 
 // Writes the key to a new file readable by its owner only. The key is never printed.
 function writeKeyFile(file, value) {
@@ -209,22 +240,24 @@ function checkExpiration(value) {
   if (minutes > EXPIRATION_MAX_MINUTES) throw new Error('--expiration takes a duration such as 30d, 12h or 90d, at most 365d');
 }
 
-async function mintOperator() {
-  const file = operatorFile();
+// Mints a key that is written to a file rather than Secret Manager (the operator key, the demo key):
+// a role and a throw-away native user with exactly the key's privileges, the key, the password reset
+// to a discarded value, the file of mode 0600, then the checks. Any failure after the mint
+// invalidates the new key with the setup key and removes the file. Returns true when every check passed.
+async function mintKeyFile(k, { file, label, fullName, purpose, checksFor }) {
   if (existsSync(file)) throw new Error(`${file} exists; move it away first (this script never overwrites a key file)`);
   const expiration = argValue('--expiration') ?? '90d';
   checkExpiration(expiration);
-  const k = OPERATOR;
   must(await es('PUT', `/_security/role/${k.role}`, { cluster: [...k.cluster, 'manage_own_api_key'], indices: k.indices }), `Role ${k.role}`);
   const password = randomPassword();
-  must(await es('PUT', `/_security/user/${k.user}`, { password, roles: [k.role], full_name: 'Conference Caddie operator service user', metadata: { purpose: 'mints the operator key of caddie-admin' } }), `User ${k.user}`);
+  must(await es('PUT', `/_security/user/${k.user}`, { password, roles: [k.role], full_name: fullName, metadata: { purpose } }), `User ${k.user}`);
   const basic = 'Basic ' + Buffer.from(`${k.user}:${password}`).toString('base64');
   const key = must(
     await es('POST', '/_security/api_key', { name: `${k.name}-${new Date().toISOString().slice(0, 10)}`, expiration, role_descriptors: { [k.role]: { cluster: k.cluster, indices: k.indices } } }, basic),
     `API key for ${k.user}`,
   );
   must(await es('POST', `/_security/user/${k.user}/_password`, { password: randomPassword() }), `Password reset for ${k.user}`);
-  console.log(`Minted the operator key ${key.id} (expires in ${expiration}).`);
+  console.log(`Minted the ${label} ${key.id} (expires in ${expiration}).`);
 
   // From here on, any failure invalidates the new key (with the setup key) and removes the file.
   let wrote = false;
@@ -244,12 +277,79 @@ async function mintOperator() {
     return false;
   }
 
-  const O = `ApiKey ${key.encoded}`;
   const checks = [];
-  const check = (ok, label) => {
+  const check = (ok, line) => {
     checks.push(ok);
-    console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`);
+    console.log(`${ok ? 'PASS' : 'FAIL'} ${line}`);
   };
+  await checksFor(`ApiKey ${key.encoded}`, check);
+  if (!checks.every(Boolean)) {
+    await undo('A check failed');
+    return false;
+  }
+  return true;
+}
+
+async function mintOperator() {
+  return mintKeyFile(OPERATOR, {
+    file: operatorFile(),
+    label: 'operator key',
+    fullName: 'Conference Caddie operator service user',
+    purpose: 'mints the operator key of caddie-admin',
+    checksFor: operatorChecks,
+  });
+}
+
+async function mintDemo() {
+  return mintKeyFile(DEMO, {
+    file: demoFile(),
+    label: 'demo refresh key',
+    fullName: 'Conference Caddie demo refresh service user',
+    purpose: 'mints the key of the demo conference refresh (demo-conference.yml)',
+    checksFor: demoChecks,
+  });
+}
+
+// What the demo key may do: read, write and refresh the talks and the conferences, and nothing else.
+async function demoChecks(D, check) {
+  const talks = await es('POST', '/caddie-talks/_search', { size: 0 }, D);
+  check(talks.status === 200, 'demo key: can read caddie-talks');
+  const refresh = await es('POST', '/caddie-talks/_refresh', undefined, D);
+  check(refresh.status === 200, 'demo key: can refresh caddie-talks (the ingest refreshes after its writes)');
+  const confs = await es('POST', '/caddie-conferences/_search', { size: 0 }, D);
+  check(confs.status === 200, 'demo key: can read caddie-conferences');
+  const people = await es('POST', '/caddie-people/_search', { size: 0 }, D);
+  check(people.status === 403, 'demo key: cannot read caddie-people');
+  const roles = await es('GET', '/_security/role', undefined, D);
+  check(roles.status === 403, 'demo key: cannot read security settings');
+  const inference = await es('GET', '/_inference/_all', undefined, D);
+  check(inference.status === 403, 'demo key: cannot list inference endpoints');
+  const priv = await es(
+    'POST',
+    '/_security/user/_has_privileges',
+    {
+      cluster: ['monitor', 'manage', 'manage_security', 'manage_api_key', 'manage_inference', 'monitor_inference'],
+      index: [
+        { names: ['caddie-talks'], privileges: ['read', 'index', 'maintenance', 'write', 'delete', 'manage', 'create_index', 'delete_index'] },
+        { names: ['caddie-conferences'], privileges: ['read', 'index', 'write', 'delete', 'manage', 'delete_index'] },
+        { names: ['caddie-people'], privileges: ['read', 'index', 'write'] },
+        { names: ['caddie-topics'], privileges: ['read', 'index', 'write'] },
+        { names: ['caddie-facets'], privileges: ['index', 'write'] },
+      ],
+    },
+    D,
+  );
+  const cl = priv.json?.cluster ?? {};
+  const ix = priv.json?.index ?? {};
+  check(priv.status === 200 && Object.keys(cl).length > 0 && Object.values(cl).every((v) => v === false), 'demo key: no cluster privilege (no monitor, manage, security or inference)');
+  check(['read', 'index', 'maintenance'].every((p) => ix['caddie-talks']?.[p] === true) && ['read', 'index'].every((p) => ix['caddie-conferences']?.[p] === true), 'demo key: read, index and maintenance on caddie-talks, read and index on caddie-conferences');
+  check(['write', 'delete'].every((p) => ix['caddie-talks']?.[p] === false && ix['caddie-conferences']?.[p] === false), 'demo key: cannot delete a talk or a conference document (no write, no delete)');
+  check(['manage', 'create_index', 'delete_index'].every((p) => ix['caddie-talks']?.[p] === false) && ['manage', 'delete_index'].every((p) => ix['caddie-conferences']?.[p] === false), 'demo key: no index management on caddie-talks or caddie-conferences');
+  check(['caddie-people', 'caddie-topics'].every((n) => ix[n]?.read === false && ix[n]?.index === false && ix[n]?.write === false) && ix['caddie-facets']?.index === false && ix['caddie-facets']?.write === false, 'demo key: nothing on caddie-people, caddie-topics or caddie-facets');
+}
+
+// What the operator key may do (caddie-admin).
+async function operatorChecks(O, check) {
   const health = await es('GET', '/_cluster/health', undefined, O);
   check(health.status === 200, 'operator key: cluster health');
   const cat = await es('GET', '/_cat/indices/caddie-*?format=json&h=index,docs.count', undefined, O);
@@ -283,11 +383,6 @@ async function mintOperator() {
   check(priv.status === 200 && ['monitor', 'manage', 'manage_security', 'manage_api_key', 'manage_inference', 'monitor_inference'].every((p) => cl[p] === false), 'operator key: no cluster monitor (it includes inference), no security, inference or manage privileges');
   check(['read', 'write', 'view_index_metadata', 'monitor', 'maintenance'].every((p) => ix['caddie-people']?.[p] === true) && ['manage', 'create_index', 'delete_index'].every((p) => ix['caddie-people']?.[p] === false), 'operator key: read, write, metadata, monitor and maintenance on caddie-*, but not manage, create_index or delete_index');
   check(['create_index', 'delete_index', 'manage'].every((p) => ix['caddie-talks']?.[p] === false) && ix[work]?.create_index === true && ix[work]?.delete_index === true, 'operator key: create_index and delete_index only on caddie-topicwork-*, refused on caddie-talks');
-  if (!checks.every(Boolean)) {
-    await undo('A check failed');
-    return false;
-  }
-  return true;
 }
 
 async function verify(readKey, peopleKey) {
@@ -370,6 +465,7 @@ async function verify(readKey, peopleKey) {
 
 try {
   if (OPERATOR_MODE) process.exit((await mintOperator()) ? 0 : 1);
+  if (DEMO_MODE) process.exit((await mintDemo()) ? 0 : 1);
   const only = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : null;
   if (only && !KEYS.some((k) => k.secret === only)) throw new Error(`--only takes ${KEYS.map((k) => k.secret).join(' or ')}`);
   if (!process.argv.includes('--verify-only')) {

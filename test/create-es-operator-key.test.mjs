@@ -39,7 +39,7 @@ function stub({ breakInference = false } = {}) {
       if (req.method === 'POST' && req.url === '/_security/api_key') { descriptor = Object.values(body.role_descriptors)[0]; return send(200, { id: KEY_ID, encoded: MINTED }); }
       if (req.method === 'DELETE' && req.url === '/_security/api_key') return send(200, { invalidated_api_keys: body.ids });
       if (req.url.startsWith('/_security/role') && req.method === 'GET') return send(operator ? 403 : 200, {});
-      if (req.url.startsWith('/_security/role') || req.url.startsWith('/_security/user/caddie-operator-svc')) return send(200, {});
+      if (req.url.startsWith('/_security/role') || /^\/_security\/user\/caddie-(operator|demo)-svc/.test(req.url)) return send(200, {});
       if (req.url === '/_security/user/_has_privileges') {
         const cluster = Object.fromEntries(body.cluster.map((p) => [p, descriptor.cluster.includes(p) || (breakInference && p === 'monitor_inference')]));
         const index = Object.fromEntries(body.index.map((i) => [i.names[0], Object.fromEntries(i.privileges.map((p) => [p, !!granted(i.names[0], p)]))]));
@@ -49,6 +49,9 @@ function stub({ breakInference = false } = {}) {
       if (req.url.startsWith('/keycheck-outside-never')) return send(granted('keycheck-outside-never', 'read') ? 200 : 403, {});
       if (req.url.startsWith('/_cluster/health')) return send(descriptor.cluster.includes('cluster:monitor/health') ? 200 : 403, {});
       if (req.url.startsWith('/_cat/indices')) return send(granted('caddie-talks', 'monitor') && descriptor.cluster.includes('cluster:monitor/state') ? 200 : 403, [{ index: 'caddie-talks-v3', 'docs.count': '12' }, { index: 'caddie-people-v2', 'docs.count': '3' }]);
+      // Document reads and the refresh of the demo key's checks, answered from the minted role.
+      const indexOp = /^\/(caddie-[a-z-]+)\/(_search|_refresh)$/.exec(req.url);
+      if (indexOp && operator) return send(granted(indexOp[1], indexOp[2] === '_search' ? 'read' : 'maintenance') ? 200 : 403, {});
       const topicwork = /^\/(caddie-topicwork-[^/?]+)$/.exec(req.url);
       if (topicwork && (req.method === 'PUT' || req.method === 'DELETE')) return send(granted(topicwork[1], req.method === 'PUT' ? 'create_index' : 'delete_index') ? 200 : 403, {});
       return send(404, {});
@@ -153,4 +156,50 @@ test('without --operator the script still requires GC_PROJECT', async () => {
   const r = await run([], { ES_URL: 'http://127.0.0.1:1', ELASTISEARCH_API_KEY: ADMIN });
   assert.equal(r.status, 1);
   assert.match(r.out, /Set GC_PROJECT/);
+});
+
+// --demo: the key of the demo conference's scheduled refresh (.github/workflows/demo-conference.yml).
+const DEMO_ROLE_INDICES = [
+  { names: ['caddie-talks*'], privileges: ['read', 'index', 'maintenance'] },
+  { names: ['caddie-conferences*'], privileges: ['read', 'index'] },
+];
+
+test('--demo mints read, index and maintenance on the talks and read and index on the conferences, into a 0600 file, and prints no key', async () => {
+  const s = await stub();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caddie-demokey-'));
+  const file = path.join(dir, 'es-demo-key');
+  try {
+    const r = await run(['--demo', '--out', file], { ES_URL: s.url, ELASTISEARCH_API_KEY: ADMIN });
+    assert.equal(r.status, 0, r.out);
+    assert.equal(fs.readFileSync(file, 'utf8'), MINTED);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    assert.ok(!r.out.includes(MINTED) && !r.out.includes(ADMIN), 'a key value reached the output');
+    assert.match(r.out, /Minted the demo refresh key abcDEF123keyid \(expires in 90d\)/);
+    assert.doesNotMatch(r.out, /FAIL/);
+    for (const line of ['demo key: can read caddie-talks', 'demo key: cannot read caddie-people', 'demo key: nothing on caddie-people, caddie-topics or caddie-facets', 'demo key: no cluster privilege', 'demo key: cannot delete a talk or a conference document']) {
+      assert.ok(r.out.includes(`PASS ${line}`), line);
+    }
+    const role = s.calls.find((c) => c.method === 'PUT' && c.url === '/_security/role/caddie_demo_ingest').body;
+    assert.deepEqual(role.indices, DEMO_ROLE_INDICES);
+    assert.deepEqual(role.cluster, ['manage_own_api_key']);
+    const key = s.calls.find((c) => c.url === '/_security/api_key' && c.method === 'POST').body;
+    assert.deepEqual(Object.values(key.role_descriptors)[0], { cluster: [], indices: DEMO_ROLE_INDICES });
+    assert.ok(s.calls.some((c) => c.url === '/_security/user/caddie-demo-svc/_password'), 'the service user password was reset');
+    assert.ok(!s.calls.some((c) => c.method === 'DELETE' && c.url === '/_security/api_key'), 'a good key is kept');
+  } finally {
+    s.server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('--demo and --operator together are refused before anything is minted', async () => {
+  const s = await stub();
+  try {
+    const r = await run(['--demo', '--operator', '--out', path.join(os.tmpdir(), 'never-written')], { ES_URL: s.url, ELASTISEARCH_API_KEY: ADMIN });
+    assert.equal(r.status, 1);
+    assert.match(r.out, /Choose one of --operator and --demo/);
+    assert.equal(s.calls.length, 0);
+  } finally {
+    s.server.close();
+  }
 });

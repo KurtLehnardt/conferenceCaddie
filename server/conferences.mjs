@@ -52,12 +52,15 @@ export async function searchableConference(slug) {
 
 // The public list of CONTRACT2 F.2. Only these fields are exposed; API codes, LF ids, status
 // reasons, counts other than the talk count, and hashes never leave the server.
+// The demo conference (demo: true, invented data) carries demo: true, and only while it is
+// searchable: a hidden or switched-off demo is left out of the list altogether, as the talk bundles
+// leave it out, so nothing of it stays visible.
 export async function publicConferences() {
   const docs = await conferenceDocs();
-  return docs.map((c) => {
+  return docs.filter((c) => c.demo !== true || c.status === 'searchable').map((c) => {
     const mapping = c.category_mapping ?? null;
     const loc = c.location ?? {};
-    return {
+    const entry = {
       slug: c.slug,
       name: c.name ?? '',
       start_date: c.start_date ?? null,
@@ -72,5 +75,7 @@ export async function publicConferences() {
       tag_groups: Array.isArray(mapping?.tag_groups) ? mapping.tag_groups : [],
       talk_count: Number.isInteger(c.counts?.talk) ? c.counts.talk : 0,
     };
+    if (c.demo === true) entry.demo = true;
+    return entry;
   });
 }

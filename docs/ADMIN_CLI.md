@@ -225,6 +225,54 @@ caddie-admin conferences unretire --event <slug> --yes --confirm <slug>
 
 What clients see after `remove`: apps on the tier 1 fallback see the conference gone when they next fetch `conferences.json`, and a bundle already on a device stays until the app replaces it. On tier 2 the Worker's directory cache can still name the slug for up to five minutes, during which the conference answers `400 conference is not available`; on tier 3 the conference cache lasts 60 seconds. [APPS.md](fork/APPS.md#what-an-installed-app-does-when-the-operator-changes-things) gives the files and lines.
 
+### The demo conference
+
+The demo conference is an invented conference for showing the apps when no real conference is on. Its talks, speakers and organisations are made up by `scripts/lib/demo-conference.mjs` (speakers such as "Avery Example, Staff Engineer, Example Corp"), and every abstract says that the session and its speakers are fictional. Its talks are always yesterday, today and tomorrow in its time zone: two rooms with a 45-minute talk every half hour from 07:00 to 23:15, three workshops a day, breaks and a hallway track. So the schedule's now and next, For you, "I'm around" and Around now, Meet up and the people screens always have something live. No people are seeded: you show the people features with real phones.
+
+It can never be taken for a real conference. Its conference document carries `demo: true` (`docs/contracts/talk-bundle.md`, The demo marker), its name contains the word "Demo", its bundle names no licensor of real content, the apps label it Demo wherever its data appears, and its pushes say "Demo". The counts that span conferences leave it out: `stats counts` without `--event` and the document counts of `stats usage` (the index sizes cannot be split). `stats counts --event <its slug>` counts it.
+
+It is off by default. `config/demo-conference.json` holds the switch and the settings:
+
+| Key | Meaning |
+|---|---|
+| `enabled` | `false` (the default) or `true`. Nothing generates, publishes or refreshes the demo while it is `false`, and `scripts/ingest.mjs` refuses its slug. |
+| `slug` | The conference slug, default `caddie-demo-conference`. It must contain `demo`. If you change it, add its folder under `data/` to `.gitignore`, as the default one is. |
+| `name` | The name shown in the apps, default `Caddie Demo Conference`. It must contain the word `Demo`. |
+| `time_zone` | The IANA zone whose days the talks follow, default `America/Denver`. Use the zone you demonstrate in, because the talks run from 07:00 to 23:15 there. |
+| `location` | `city`, `region`, `country` and `virtual`, default `Demo City`. |
+
+The ingest builds the demo only for an explicit `--event <its slug>`, never in `--all-upcoming`, and without any network call. Its talk ids are the same every day (`d1-a10` is always today's 10:00 talk in the main hall), so a daily run only moves the times of the same talks: nothing is re-embedded or deleted, the shrink guard is never involved, and nobody's shared talks change. The operator file applies to it as to any conference.
+
+**Switch it on (tiers 1 and 3).** Do it once the apps that show the Demo label are released: while the demo is on, an app that has not chosen a conference opens on it whenever it is the earliest conference that has not ended.
+
+1. Tier 3 only: deploy this release once (`npm run deploy`). The server's handling of the demo is new: the marker in `GET /api/conferences`, the Demo label in pushes, and the longer lifetime of its profiles (below).
+2. Set `"enabled": true` in `config/demo-conference.json`, commit it and push it to `main`. `pages.yml` runs on the push and publishes the demo's talk bundle, which every tier's apps use for the talk features.
+3. Tier 3 only: index it once, with its topics and facets, using the operator key: `caddie-admin conferences add --event caddie-demo-conference`.
+4. Tier 3 only: mint the narrow key of the scheduled refresh with a short-lived setup key in `ELASTISEARCH_API_KEY`, as in [step 5 of the tier 3 guide](fork/TIER3_GCP_ELASTIC.md#5-the-service-keys-the-push-keys-the-operator-key-and-ending-the-setup-key). It holds read, index and maintenance on `caddie-talks*` and read and index on `caddie-conferences*`: it can write and update those documents but never delete one, and it holds nothing on the people indices. The script checks all of that. Keep it in a GitHub environment that only `main` may use, set the cluster address, then delete the file:
+
+   ```sh
+   node scripts/create-es-keys.mjs --demo            # writes ~/.config/conference-caddie/es-demo-key, mode 0600, valid 90 days
+   gh api -X PUT repos/<owner>/<repo>/environments/demo-refresh --input - <<'EOT'
+   {"deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
+   EOT
+   gh api -X POST repos/<owner>/<repo>/environments/demo-refresh/deployment-branch-policies -f name=main -f type=branch
+   gh secret set CADDIE_DEMO_ES_API_KEY --env demo-refresh --repo <owner>/<repo> < ~/.config/conference-caddie/es-demo-key
+   rm ~/.config/conference-caddie/es-demo-key
+   gh variable set CADDIE_ES_URL --repo <owner>/<repo> --body "<your ES_URL>"
+   ```
+
+5. Run the refresh once by hand: `gh workflow run demo-conference.yml --repo <owner>/<repo>`. From then on `.github/workflows/demo-conference.yml` runs every three hours. It refreshes the demo on Elasticsearch with `scripts/ingest.mjs --refresh-only`, which skips it when Elasticsearch does not hold it or holds it hidden or removed by an operator, so the schedule never creates it or brings it back. It republishes the bundles when the live ones are stale, unless an ingest or Pages run is already publishing them. Every run is idempotent. Mint a new key before the old one expires.
+
+The demo's data folder under `data/` is generated by every run and ignored by git, so there is nothing to commit for it; `hide` and `unhide` work without it. Its end date is always tomorrow, so on tier 3 a profile, a push registration or a nudge record written for it lasts seven days after that (`DEMO_GRACE_DAYS` in `server/people-shared.mjs`) instead of running out with the rolling end date. Within a week of a demonstration, save the profile again and turn push nudges off and on, so the push registration is renewed too.
+
+**Switch it off.**
+
+1. Set `"enabled": false`, commit it and push it to `main`. `pages.yml` drops the demo from the published index, and the scheduled refresh stops refreshing it.
+2. On tier 3, take it off the backend: `caddie-admin conferences hide --event caddie-demo-conference --yes --confirm caddie-demo-conference` keeps its talks, clears its presence and deletes its meet requests and nudges (twice, a minute apart, because the server caches the conference list for 60 seconds, so the command takes a little over a minute), or `caddie-admin conferences remove --event caddie-demo-conference --yes --confirm caddie-demo-conference` deletes everything of it. Either way the server leaves it out of `GET /api/conferences`. Commit `data/conference-operator.json`; the demo's own folder is ignored by git, so the conference file the command names needs no commit. Until this step is done, every scheduled run warns that Elasticsearch still lists the demo.
+3. Delete the `CADDIE_DEMO_ES_API_KEY` secret when you no longer need it.
+
+**Tier 2.** The talk bundles carry the demo for the talk features, but the Worker does not yet refresh it every day, so its people features would not work on it. Keep it switched off on a tier 2 deployment for now (`DECISIONS.md`, "The demo conference").
+
 ### Stats
 
 ```sh

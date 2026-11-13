@@ -53,9 +53,16 @@ name: Deploy the talk bundles to GitHub Pages
 #
 # Triggers: a push to main that changes the conference data or the bundle builder; a weekly
 # scheduled full rebuild that recomputes every vector it builds (--reuse-from none), so nothing that
-# was ever published persists unnoticed (docs/BUNDLES.md); a manual run; and the call from
-# ingest.yml. In a called run github.event_name is the caller's, so the scheduled weekly ingest also
-# re-embeds the conferences it refreshed from scratch.
+# was ever published persists unnoticed (docs/BUNDLES.md); a manual run; and the calls from
+# ingest.yml and demo-conference.yml. In a called run github.event_name is the caller's, so the
+# scheduled weekly ingest also re-embeds the conferences it refreshed from scratch; the demo
+# conference's refresh (demo_refresh) keeps reusing the published vectors.
+#
+# The demo conference (config/demo-conference.json, off by default) is generated in every build:
+# scripts/demo-conference.mjs prepare writes data/<its slug>/ for today when it is on (and removes the
+# folder when it is off), and its slug is always passed in --fresh, so the live bundle follows the
+# switch and the operator file whatever its sources.json record says. Its talks are invented and
+# labelled; docs/ADMIN_CLI.md, "The demo conference".
 #
 # Pages must be enabled once with the source set to "GitHub Actions" (Settings, Pages).
 
@@ -69,6 +76,8 @@ on:
       - 'scripts/build-bundles.mjs'
       - 'scripts/carry-forward-bundles.mjs'
       - 'scripts/pages-landing.mjs'
+      - 'scripts/demo-conference.mjs'
+      - 'scripts/ingest.mjs'
       - 'scripts/lib/**'
       - 'tools/bundles/**'
       - '.github/workflows/pages.yml'
@@ -85,6 +94,11 @@ on:
         type: string
         required: false
         default: ''
+      demo_refresh:
+        description: 'A refresh of the demo conference (demo-conference.yml): reuse the published vectors even when the caller runs on a schedule.'
+        type: boolean
+        required: false
+        default: false
 
 # The build job installs the third-party packages of tools/bundles (about seventy) with no install
 # script, and nothing from the root package, which the bundle builder, the carry-forward script and the
@@ -226,6 +240,15 @@ jobs:
           echo "Laid $count conference(s) from the ingest run over data/."
           echo "fresh=$fresh" >> "$GITHUB_OUTPUT"
 
+      # The demo conference, before any third-party package is installed: its folder under data/ is
+      # regenerated for today when config/demo-conference.json switches it on, and removed when it
+      # is off (scripts/demo-conference.mjs prepare). A slug the ingest run staged is kept as staged.
+      - name: Prepare the demo conference
+        id: demo
+        env:
+          STAGED: ${{ steps.lay.outputs.fresh }}
+        run: node scripts/demo-conference.mjs prepare --data data --staged "$STAGED"
+
       # The embedding library, with no install script: onnxruntime-node's postinstall would
       # download an unverified CUDA provider, and the CPU binaries ship in the package.
       - name: Install the bundle tools
@@ -251,16 +274,20 @@ jobs:
       - name: Build the talk bundles
         env:
           MODEL_FLAG: ${{ steps.model-cache.outputs.cache-hit == 'true' && '--no-model-download' || '' }}
-          REUSE_FLAG: ${{ github.event_name == 'schedule' && '--reuse-from none' || '' }}
+          REUSE_FLAG: ${{ github.event_name == 'schedule' && !inputs.demo_refresh && '--reuse-from none' || '' }}
           LIVE_SINCE: ${{ steps.deployed.outputs.since }}
           FRESH: ${{ steps.lay.outputs.fresh }}
+          DEMO_SLUG: ${{ steps.demo.outputs.slug }}
         run: |
           # Never --offline here: it would also forbid reusing the published vectors.
           # --live keeps a live bundle whose schedule is newer than the data here (see above), except
-          # the conferences this ingest run staged (--fresh), which always follow the staged files.
+          # the conferences this ingest run staged and the demo conference (--fresh), which always
+          # follow the files here.
           live_args=(--live "$BUNDLE_BASE")
           if [ -n "$LIVE_SINCE" ]; then live_args+=(--live-since "$LIVE_SINCE"); fi
-          if [ -n "$FRESH" ]; then live_args+=(--fresh "$FRESH"); fi
+          fresh="$FRESH"
+          if [ -n "$DEMO_SLUG" ]; then fresh="${fresh:+$fresh,}$DEMO_SLUG"; fi
+          if [ -n "$fresh" ]; then live_args+=(--fresh "$fresh"); fi
           node scripts/build-bundles.mjs --out dist-pages --base-url "$BUNDLE_BASE" "${live_args[@]}" $MODEL_FLAG $REUSE_FLAG \
             --takedown "$TAKEDOWN" --publisher-name "$PUBLISHER"
 
