@@ -56,6 +56,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -522,7 +523,9 @@ class ProfileEntryUiTest {
         // Both answers are in once the editor takes another push (its pushes run one at a time):
         // the second one says nothing more.
         val editor = runOnIdle { checkNotNull(host).profileEditor(controller.state.value.backend) { error("Profile's editor is gone") } }
-        runBlocking { editor.push() }
+        // Not runBlocking: on iOS the test runs on the main thread, where the earlier pushes resume.
+        val barrier = scope.async { editor.push() }
+        waitUntil(timeoutMillis = 20_000) { barrier.isCompleted }
         waitForIdle()
         runOnIdle { assertEquals(listOf(PeopleCommonStrings.NOT_SAVED to PeopleCommonStrings.OPEN_PROFILE), toasts.toList()) }
 
