@@ -373,7 +373,7 @@ export const NATIVE_ALERT = Object.freeze({
 // The notification of a push about the demo conference: labelled, otherwise the same.
 export const NATIVE_ALERT_DEMO = Object.freeze({
   title: 'Conference Caddie (Demo)',
-  body: 'Demo conference: someone whose experience matches yours is in your zone right now',
+  body: 'Demo: someone whose experience matches yours is in your zone right now',
   deepLink: NATIVE_ALERT.deepLink,
 });
 

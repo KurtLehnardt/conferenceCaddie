@@ -471,7 +471,8 @@ describe('push nudge about the demo conference', () => {
     assert.match(web.body, /^Demo: someone who's worked on .+ is in Hall A right now$/);
     const DEMO_ALERT = { title: NATIVE_ALERT_DEMO.title, body: NATIVE_ALERT_DEMO.body, link: NATIVE_ALERT_DEMO.deepLink };
     assert.match(DEMO_ALERT.title, /Demo/);
-    assert.match(DEMO_ALERT.body, /^Demo conference: /);
+    assert.equal(DEMO_ALERT.title, 'Conference Caddie (Demo)', 'one title rule for every demo notification (docs/contracts/talk-bundle.md)');
+    assert.match(DEMO_ALERT.body, /^Demo: /);
     assert.equal(DEMO_ALERT.link, ALERT.link);
     for (const address of [`apns:${tApns}`, `fcm:${vFcm}`]) assert.deepEqual(words.get(address), DEMO_ALERT, address);
     const apns = fake.pushes.find((p) => p.platform === 'apns');

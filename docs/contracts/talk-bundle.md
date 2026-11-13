@@ -49,6 +49,7 @@ A conference entry may carry `"demo": true`, here, in `GET /api/conferences` and
 
 - The field is optional and only ever `true`: it is absent on every real conference, so their entries and bundles keep the bytes they had. A schema check refuses `"demo": false` and any other value.
 - Clients read exactly `demo === true` and show a "Demo" label on every surface where that conference's data appears: the conference list and picker, talk cards and details, search results, For you, the people screens (Around now, profile, Meet up, requests) and any notification text.
+- Every notification about the demo, sent by a server or shown by an app on its own, is titled `Conference Caddie (Demo)` and its body starts with `Demo: `.
 - Anything that spans conferences leaves it out (operator counts and usage, cross-conference checks). A demo that is hidden or switched off is not listed at all, by the bundles or by `GET /api/conferences`, rather than listed as unavailable.
 - Its bundle's attribution names no licensor of real content: the licensor says the data is invented, the licence is CC0 1.0 and `source_url` is null.
 - Fixture: `contracts/fixtures/demo/conferences.json` (an index with a demo entry and a real one) and `contracts/fixtures/demo/invalid-demo-false.json` (a conference entry that must fail).
