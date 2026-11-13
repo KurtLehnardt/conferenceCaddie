@@ -988,26 +988,37 @@ Worker"):
 - Its last day is always tomorrow, so its object's `visible_until_ms`, which profiles, push
   subscriptions, blocks and meets take, is `DEMO_GRACE_DAYS` (7) days later, as on tier 3
   (`conferenceVisibleUntilMs` in `src/lib/time.js`).
-- The cron still visits it for its own purge, but its usage is never added to another conference's
-  meter (the `others` that the pace and the soft caps of each object read), and it is left out of
-  `GET /admin/stats` without `event`. Its own meter still counts every real conference.
+- Its usage counts toward every real conference's meter like any conference's (the `others` that
+  the pace and the soft caps of each object read), because the daily limits are the account's, and
+  the cron visits it for its own purge. `GET /admin/stats` without `event` leaves it out of `usage`
+  and `holds`. It also has its own allotment, `DEMO_SHARE` (wrangler.toml, 0.1 by default) of each
+  daily budget: its pace is the slower of the account-wide one and its allotment's, keyword search
+  and nudges stop at its share of rows read and written, and once it has used its share of the
+  requests or written rows its `PUT` and `POST` routes answer `503 daily_limit` until 00:00 UTC.
+  Reads still answer, at pace 10, and deletes are never refused.
 - When its document arrives with any status other than `searchable` (`caddie-admin conferences
   hide`, or an ingest whose operator file hides it), its object deletes every presence row with its
   Bluetooth session, the positions in memory, the Bluetooth caps record, every meet, nudge and nudge
-  send, and replaces its Store as a wipe does, so a request in flight cannot write a row back or
-  push about it. Profiles, shared talks, blocks, reports and push subscriptions stay, and the cron
-  purges them as for any conference. A real conference's hide keeps everything, as before.
-  `DELETE /admin/conference` wipes the demo like any conference.
+  send. Before the delete it replaces its Store and moves its wipe counter on, as a wipe does, so a
+  request in flight writes nothing back and starts no further push (a push already sent still
+  arrives). Profiles, shared talks, blocks, reports and push subscriptions stay, and the cron
+  purges them as for any conference; reports go only with a remove. A real conference's hide keeps
+  everything, as before. `DELETE /admin/conference` wipes the demo like any conference.
+- Every fan-out of `PUT /admin/conferences` carries `doc_seq`, the number of the directory row's
+  last write (a counter of the DirectoryDO), and an object ignores a document older than the last
+  one it applied, so a refresh whose fan-out arrives late cannot undo a hide.
 - `.github/workflows/demo-conference.yml` refreshes it every three hours (its `worker` job) with
   `scripts/ingest.mjs --event <its slug> --dry-run` and `push-ingest.mjs --events-from` the
-  ingest's report `--refresh-only`, with the `CADDIE_API_BASE` variable and the `CADDIE_ADMIN_TOKEN`
-  secret that `ingest.yml` uses. `--refresh-only` pushes only while `GET /api/conferences` lists the
-  demo as searchable, so the refresh never adds it, shows a hidden one again or brings back a
-  removed one, and logs a notice instead; adding it is the operator's `caddie-admin conferences
+  ingest's report `--refresh-only`, with the `CADDIE_API_BASE` variable, the `CADDIE_ADMIN_TOKEN`
+  secret and the optional Cloudflare Access secrets that `ingest.yml` uses, and not while an
+  `ingest.yml` run is queued or running. `--refresh-only` pushes only while `GET /api/conferences`
+  lists the demo as searchable, and sends each document with `"expect_status": "searchable"`, so the
+  refresh never adds it, shows a hidden one again or brings back a removed one, even one hidden
+  during the run, and logs a notice instead; adding it is the operator's `caddie-admin conferences
   add`, which runs `ingest.yml`. The talk ids never change, so each push moves the times of the
   same talks: finalize deletes nothing, nobody's shared talks change and nothing is re-embedded.
-  The job sends no Cloudflare Access headers, so it cannot reach a Worker whose `/admin/*` an
-  Access application guards.
+  With the demo switched off, the job reads the public list instead and warns while the Worker
+  still lists the demo as searchable.
 
 ## Logs and CPU
 
