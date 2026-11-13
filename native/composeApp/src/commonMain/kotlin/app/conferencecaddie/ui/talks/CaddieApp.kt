@@ -455,7 +455,6 @@ fun CaddieApp(
                     SearchTab(
                         view = searchView,
                         onView = { searchView = it },
-                        demo = r.bundle.conference.demo,
                         search = {
                             SearchScreen(
                                 search, r.bundle, interestedIds, nowMs, toggle, { openTalk = it.talkId }, openUrl,

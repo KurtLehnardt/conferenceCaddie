@@ -29,6 +29,7 @@ import app.conferencecaddie.ui.components.CaddieChip
 import app.conferencecaddie.ui.components.ChipKind
 import app.conferencecaddie.ui.components.ChipRow
 import app.conferencecaddie.ui.components.ClearAllButton
+import app.conferencecaddie.ui.components.DemoNote
 import app.conferencecaddie.ui.components.ErrorBanner
 import app.conferencecaddie.ui.components.FiltersChip
 import app.conferencecaddie.ui.components.NoteText
@@ -40,6 +41,7 @@ import app.conferencecaddie.ui.components.SuggestionChip
 import app.conferencecaddie.ui.components.TalkCard
 import app.conferencecaddie.ui.components.TimePhraseChip
 import app.conferencecaddie.ui.components.highlight
+import app.conferencecaddie.ui.components.showsDemoLabel
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
@@ -79,7 +81,7 @@ fun SearchScreen(
         if (at < 0) {
             listState.scrollToItem(0)
         } else {
-            val headers = listOf(result.suggestions.isNotEmpty(), true, !result.happeningNowAvailable, true, result.degraded).count { it }
+            val headers = listOf(conference.demo, result.suggestions.isNotEmpty(), true, !result.happeningNowAvailable, true, result.degraded).count { it }
             listState.scrollToItem(headers + at, scrollOffset = RANK_SCROLL_PX)
         }
     }
@@ -99,6 +101,10 @@ fun SearchScreen(
             contentPadding = PaddingValues(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            // A demo conference's note scrolls with the results; the rank jump above counts it.
+            if (showsDemoLabel(conference.demo)) {
+                item("demo") { DemoNote(true, Modifier.padding(horizontal = Caddie.dimens.gutter)) }
+            }
             if (result != null && result.suggestions.isNotEmpty()) {
                 item("suggestions") {
                     ChipRow(lead = Strings.Search.DID_YOU_MEAN) {

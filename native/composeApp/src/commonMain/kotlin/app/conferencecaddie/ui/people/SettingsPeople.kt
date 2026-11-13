@@ -20,6 +20,7 @@ import app.conferencecaddie.shared.people.MetPerson
 import app.conferencecaddie.shared.people.PeopleUiState
 import app.conferencecaddie.ui.components.ButtonVariant
 import app.conferencecaddie.ui.components.CaddieButton
+import app.conferencecaddie.ui.components.DemoNote
 import app.conferencecaddie.ui.components.SettingsGroup
 import app.conferencecaddie.ui.components.SettingsRow
 import app.conferencecaddie.ui.components.SettingsTextRow
@@ -36,6 +37,8 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun SettingsPeople(state: PeopleUiState, host: PeopleHost) {
+    // The groups below hold a demo conference's people, so its Demo note comes first.
+    DemoNote(state.conference?.demo == true)
     BlockedPeople(state, host)
     PeopleIMet(state, host)
     PeopleIWatch(state, host)

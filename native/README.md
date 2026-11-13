@@ -248,13 +248,18 @@ A conference entry with `"demo": true` is a demo conference with invented talks 
 (`Conference.demo`; any other value, or no field, is a real conference). Every screen labels it
 as the web does (`web/src/components/demo.ts`): the Demo pill (`DemoPill` in `ui/components/Demo.kt`,
 drawn as the Sample pill is) follows its name in the app bar and the switcher and the titles of
-Profile, Requests and Meet up, and sits at the top of each full talk card and of the talk sheet;
-`DemoNote` (the pill and "A demo conference with invented talks and speakers, not a real event.")
-opens People, For you, Search, Interested, Profile, Requests, Meet up and Import my schedule. A
-notification the device shows for it is titled "Conference Caddie · Demo conference", and a shared
-list names it "(Demo)". The words are the shared module's `Demo`. The parity states of those
-screens (`DemoParityStates`, named `demo-*`) publish the sample summit as a demo conference: pass
-their names in `SIMCTL_CHILD_CADDIE_PARITY_ONLY` (iOS) or `caddieParityOnly` (Android).
+Profile, Requests and Meet up, and sits at the top of each full talk card, each For you card and
+the talk sheet; `DemoNote` (the pill and "A demo conference with invented talks and speakers, not
+a real event.") opens People, For you, Search and Schedule (inside their lists, so it scrolls with
+them), Interested, Profile, Requests, Meet up, Settings' people groups, Import my schedule and the
+offline states of those screens. Every notification about it, from a server or shown by the app
+(the nudges, Bluetooth's nearby notification and Android's ongoing Bluetooth notification), is
+titled "Conference Caddie (Demo)" and its body starts with "Demo: "; a shared list names it
+"(Demo)". The device keeps the mark per conference when presence or Bluetooth turns on, so a
+notification says so even before the conference list loads. The words are the shared module's
+`Demo`. The parity states of those screens (`DemoParityStates`, named `demo-*`) publish the sample
+summit as a demo conference: pass their names in `SIMCTL_CHILD_CADDIE_PARITY_ONLY` (iOS) or
+`caddieParityOnly` (Android).
 
 On Android the shots change the device while they run: its display size and density, its text size,
 and SystemUI's demo mode, which keeps the status bar's clock at the pinned 09:00. Use an AVD of

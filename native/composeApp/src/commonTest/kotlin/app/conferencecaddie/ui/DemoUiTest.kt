@@ -1,6 +1,8 @@
 package app.conferencecaddie.ui
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -12,6 +14,7 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.v2.runComposeUiTest
 import app.conferencecaddie.shared.BackendUrl
@@ -30,9 +33,15 @@ import app.conferencecaddie.ui.components.TalkCard
 import app.conferencecaddie.ui.components.showsDemoLabel
 import app.conferencecaddie.ui.shell.ConferenceItem
 import app.conferencecaddie.ui.shell.DebugLaunch
+import app.conferencecaddie.ui.shell.PeoplePage
+import app.conferencecaddie.ui.shell.ShellNavigation
 import app.conferencecaddie.ui.shell.ShellState
 import app.conferencecaddie.ui.shell.Tab
+import app.conferencecaddie.ui.shell.TabContent
+import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.talks.CaddieApp
+import app.conferencecaddie.ui.talks.FixedEmbedder
+import app.conferencecaddie.ui.talks.TalkLaunch
 import app.conferencecaddie.ui.talks.TestBackend
 import app.conferencecaddie.ui.talks.conferenceItem
 import app.conferencecaddie.ui.talks.shareText
@@ -160,12 +169,84 @@ class DemoUiTest {
     }
 
     @Test
+    fun theProfileRequestsAndMeetUpTitlesCarryThePillButSettingsDoesNot() = runComposeUiTest {
+        val nav = ShellNavigation()
+        val state = ShellState(
+            capabilities = Capabilities(people = Capabilities.People(enabled = true)),
+            conferences = listOf(ConferenceItem("caddie-demo-conference", "Caddie Demo Conference", "Mar 2–4, 2099 · Demo City", demo = true)),
+            selectedConferenceId = "caddie-demo-conference",
+            appVersion = "test",
+        )
+        setContent { App(state, content = TabContent(peoplePage = { Box(Modifier.fillMaxSize()) }), navigation = nav) }
+        val pills = { onAllNodes(hasTestTag(DEMO_PILL_TAG), useUnmergedTree = true).fetchSemanticsNodes().size }
+        for ((page, title) in listOf(PeoplePage.Profile to Strings.AppBar.PROFILE, PeoplePage.Inbox to Strings.AppBar.REQUESTS, PeoplePage.Meet("m1") to Strings.AppBar.MEET_UP)) {
+            nav.openPage(page)
+            waitForIdle()
+            assertTrue(onAllNodes(hasText(title)).fetchSemanticsNodes().isNotEmpty(), "$title is showing")
+            assertEquals(1, pills(), "$title has the pill")
+            onNode(hasTestTag(DEMO_PILL_TAG), useUnmergedTree = true).let { assertEquals(Demo.SPOKEN, it.description()) }
+        }
+        nav.openSettings()
+        waitForIdle()
+        assertTrue(onAllNodes(hasText(Strings.Settings.TITLE)).fetchSemanticsNodes().isNotEmpty(), "Settings is showing")
+        assertEquals(0, pills(), "Settings has none")
+    }
+
+    @Test
+    fun thePlaceholdersOfADemoConferenceKeepTheNote() = runComposeUiTest {
+        setContent {
+            CaddieTheme {
+                Column {
+                    Box(Modifier.testTag("people-off")) { PeoplePlaceholder(online = false, demo = true) }
+                    Box(Modifier.testTag("for-you-off")) { ForYouPlaceholder(online = false, demo = true) }
+                    Box(Modifier.testTag("real-off")) { PeoplePlaceholder(online = false) }
+                }
+            }
+        }
+        onNode(hasTestTag(DEMO_NOTE_TAG) and hasAnyAncestor(hasTestTag("people-off"))).assertExists()
+        onNode(hasTestTag(DEMO_NOTE_TAG) and hasAnyAncestor(hasTestTag("for-you-off"))).assertExists()
+        onNode(hasTestTag(DEMO_NOTE_TAG) and hasAnyAncestor(hasTestTag("real-off"))).assertDoesNotExist()
+    }
+
+    @Test
+    fun forYouOfADemoConferenceOpensWithTheNoteAndItsCardsCarryThePill() = runComposeUiTest {
+        setContent {
+            CaddieApp(
+                core,
+                isDebugBuild = false,
+                appVersion = "test",
+                launch = DebugLaunch(tab = Tab.ForYou),
+                talkLaunch = TalkLaunch(learn = listOf("kubernetes")),
+                embedder = { FixedEmbedder(mapOf("kubernetes" to 1)) },
+            )
+        }
+        waitForTag("for-you-alpha-conf-2099:3")
+        onNode(hasTestTag(DEMO_NOTE_TAG) and hasAnyAncestor(hasTestTag("for-you-screen"))).assertExists()
+        onNode(hasTestTag(DEMO_PILL_TAG) and hasAnyAncestor(hasTestTag("for-you-alpha-conf-2099:3")), useUnmergedTree = true).assertExists()
+    }
+
+    @Test
+    fun interestedOfADemoConferenceOpensWithTheNoteEmptyOrNot() = runComposeUiTest {
+        setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Interested), embedder = null) }
+        // Empty: the placeholder opens with the note.
+        waitForTag(DEMO_NOTE_TAG)
+        onNodeWithText(Strings.Interested.EMPTY).assertExists()
+        // With a marked talk: the list opens with the note, and the card carries the pill.
+        core.setInterested("alpha-conf-2099:1", true)
+        waitForTag("interested-screen")
+        waitForTag("talk-alpha-conf-2099:1")
+        onNode(hasTestTag(DEMO_NOTE_TAG) and hasAnyAncestor(hasTestTag("interested-screen"))).assertExists()
+        onNode(hasTestTag(DEMO_PILL_TAG) and hasAnyAncestor(hasTestTag("talk-alpha-conf-2099:1")), useUnmergedTree = true).assertExists()
+    }
+
+    @Test
     fun aDemoConferenceFromTheBackendIsLabelledOnItsScreens() = runComposeUiTest {
         setContent { CaddieApp(core, isDebugBuild = false, appVersion = "test", launch = DebugLaunch(tab = Tab.Search), embedder = null) }
 
-        // The Search tab: the note above the Search | Schedule switch, and a pill on each talk card.
+        // The Search tab: the note at the top of the results, scrolling with them, and a pill on each talk card.
         waitForTag("talk-alpha-conf-2099:1")
         waitForTag(DEMO_NOTE_TAG)
+        onNode(hasTestTag(DEMO_NOTE_TAG) and hasAnyAncestor(hasTestTag("search-results"))).assertExists()
         onNode(hasTestTag(DEMO_PILL_TAG) and hasAnyAncestor(hasTestTag("talk-alpha-conf-2099:1")), useUnmergedTree = true).assertExists()
         onNode(hasTestTag(DEMO_PILL_TAG) and hasAnyAncestor(hasTestTag("conference-switcher")), useUnmergedTree = true).assertExists()
 

@@ -18,7 +18,7 @@ import androidx.compose.ui.unit.dp
 import app.conferencecaddie.shared.Demo
 import app.conferencecaddie.ui.theme.Caddie
 
-// The "Demo" label of a demo conference (web/src/components/demo.tsx): one pill, drawn wherever the
+// The "Demo" label of a demo conference (web/src/components/demo.ts): one pill, drawn wherever the
 // conference's data shows (the app bar, the switcher, talk cards and the talk sheet), and the note
 // at the top of each screen of the conference. Its words are the shared module's Demo, so the
 // apps and the web say the same thing.

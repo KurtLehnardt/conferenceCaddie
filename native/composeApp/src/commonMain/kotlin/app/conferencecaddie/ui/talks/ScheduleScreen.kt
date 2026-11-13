@@ -62,7 +62,7 @@ enum class SearchView { Search, Schedule }
 /**
  * The Search tab: the "Search | Schedule" switch over the two views, as the web's `.view-switch`.
  * [search] and [schedule] draw the views; the tab keeps both models, so each view keeps its state when
- * the other one is shown. A [demo] conference's Demo note sits above the switch, so both views show it.
+ * the other one is shown.
  */
 @Composable
 fun SearchTab(
@@ -70,10 +70,8 @@ fun SearchTab(
     onView: (SearchView) -> Unit,
     search: @Composable () -> Unit,
     schedule: @Composable () -> Unit,
-    demo: Boolean = false,
 ) {
     Column(Modifier.fillMaxSize()) {
-        DemoNote(demo, Modifier.padding(start = Caddie.dimens.gutter, end = Caddie.dimens.gutter, top = 4.dp))
         Segmented(
             options = listOf(
                 SegmentOption(SearchView.Search, Strings.Search.VIEW_SEARCH),
@@ -253,7 +251,12 @@ fun ScheduleScreen(
         contentPadding = PaddingValues(bottom = 24.dp),
     ) {
         item("days") {
-            DayChips(days, day, onChange = { model.day = it }, today = today.takeIf { running })
+            // A demo conference's note scrolls with the schedule, inside its first item so the
+            // items keep the indices the jump to now counts on (HEADER_ITEMS).
+            Column(Modifier.fillMaxWidth()) {
+                DemoNote(conference.demo, Modifier.padding(start = Caddie.dimens.gutter, end = Caddie.dimens.gutter, bottom = 8.dp))
+                DayChips(days, day, onChange = { model.day = it }, today = today.takeIf { running })
+            }
         }
         item("chips") {
             FilterChips(

@@ -43,6 +43,7 @@ import app.conferencecaddie.ui.components.LucideImage
 import app.conferencecaddie.ui.components.ProgressBar
 import app.conferencecaddie.ui.components.caddieClickable
 import app.conferencecaddie.ui.components.DemoNote
+import app.conferencecaddie.ui.components.DemoPill
 import app.conferencecaddie.ui.components.showsDemoLabel
 import app.conferencecaddie.ui.components.textIconSize
 import app.conferencecaddie.ui.icons.LucideIcon
@@ -180,6 +181,7 @@ fun ForYouScreen(
                     items(r.items, key = { it.talk.talkId }) { item ->
                         ForYouCard(
                             item = item,
+                            demo = bundle.conference.demo,
                             interested = item.talk.talkId in interested,
                             dimmed = model.refreshing,
                             onToggleInterested = { onToggleInterested(item.talk) },
@@ -252,6 +254,7 @@ private fun WhyLine(label: String, value: String, modifier: Modifier = Modifier)
 @Composable
 private fun ForYouCard(
     item: ForYou.Item,
+    demo: Boolean,
     interested: Boolean,
     dimmed: Boolean,
     onToggleInterested: () -> Unit,
@@ -274,6 +277,8 @@ private fun ForYouCard(
             .testTag("for-you-${t.talkId}"),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
+        // A demo conference's talk carries the Demo pill at the top, as a talk card does.
+        if (showsDemoLabel(demo)) DemoPill()
         Text(t.title, style = Caddie.type.cardTitle, color = c.text, modifier = Modifier.semantics { heading() })
         if (t.speakers.isNotEmpty()) Text(t.speakers.joinToString(", "), style = Caddie.type.meta, color = c.text2)
         Text(

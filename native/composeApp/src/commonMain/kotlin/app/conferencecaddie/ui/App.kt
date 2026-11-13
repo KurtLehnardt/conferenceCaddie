@@ -449,8 +449,8 @@ private fun navItem(tab: Tab, state: ShellState): NavItem<Tab> = when (tab) {
 private fun TabBody(tab: Tab, state: ShellState, content: TabContent) {
     Box(Modifier.fillMaxSize().testTag("tab-body-${tab.name}")) {
         when (tab) {
-            Tab.People -> content.people?.invoke() ?: PeoplePlaceholder(state.online)
-            Tab.ForYou -> content.forYou?.invoke() ?: ForYouPlaceholder(state.online)
+            Tab.People -> content.people?.invoke() ?: PeoplePlaceholder(state.online, demo = state.selectedConference?.demo == true)
+            Tab.ForYou -> content.forYou?.invoke() ?: ForYouPlaceholder(state.online, demo = state.selectedConference?.demo == true)
             Tab.Search -> content.search?.invoke() ?: PlaceholderScreen(LucideIcon.Search, null, Strings.Search.PLACEHOLDER)
             Tab.Interested -> content.interested?.invoke() ?: InterestedPlaceholder()
         }
@@ -464,23 +464,42 @@ private fun PlaceholderScreen(icon: LucideIcon, title: String?, body: String?) {
     }
 }
 
-/** People until its screens arrive (phase 3), or the web's offline state. */
+/** People until its screens arrive (phase 3), or the web's offline state; a [demo] conference's note comes first. */
 @Composable
-fun PeoplePlaceholder(online: Boolean) {
+fun PeoplePlaceholder(online: Boolean, demo: Boolean = false) {
     if (!online) {
-        NeedsConnection(Strings.Offline.PEOPLE_TITLE)
+        DemoNeedsConnection(Strings.Offline.PEOPLE_TITLE, demo)
     } else {
-        PlaceholderScreen(LucideIcon.Users, Strings.People.PLACEHOLDER_TITLE, Strings.People.PLACEHOLDER_BODY)
+        DemoAbove(demo) { PlaceholderScreen(LucideIcon.Users, Strings.People.PLACEHOLDER_TITLE, Strings.People.PLACEHOLDER_BODY) }
     }
 }
 
-/** For you until on-device suggestions arrive (phase 2b), or the web's offline state. */
+/** For you until on-device suggestions arrive (phase 2b), or the web's offline state; a [demo] conference's note comes first. */
 @Composable
-fun ForYouPlaceholder(online: Boolean) {
+fun ForYouPlaceholder(online: Boolean, demo: Boolean = false) {
     if (!online) {
-        NeedsConnection(Strings.ForYou.NEEDS_CONNECTION_TITLE)
+        DemoNeedsConnection(Strings.ForYou.NEEDS_CONNECTION_TITLE, demo)
     } else {
-        PlaceholderScreen(LucideIcon.Sparkles, Strings.ForYou.PICK_TITLE, Strings.ForYou.LEDE)
+        DemoAbove(demo) { PlaceholderScreen(LucideIcon.Sparkles, Strings.ForYou.PICK_TITLE, Strings.ForYou.LEDE) }
+    }
+}
+
+/**
+ * The web's NeedsConnection with a [demo] conference's note above it, as the web shows the note
+ * above every screen of the conference.
+ */
+@Composable
+private fun DemoNeedsConnection(title: String, demo: Boolean, body: String = Strings.Offline.NEEDS_CONNECTION_BODY) {
+    DemoAbove(demo) { NeedsConnection(title, body) }
+}
+
+/** [content] under a [demo] conference's note, which takes the screen's gutter; [content] alone otherwise. */
+@Composable
+private fun DemoAbove(demo: Boolean, content: @Composable () -> Unit) {
+    if (!demo) return content()
+    Column(Modifier.fillMaxSize()) {
+        DemoNote(true, Modifier.padding(start = Caddie.dimens.gutter, end = Caddie.dimens.gutter, top = 4.dp))
+        Box(Modifier.weight(1f)) { content() }
     }
 }
 

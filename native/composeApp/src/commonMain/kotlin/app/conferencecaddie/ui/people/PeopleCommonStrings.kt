@@ -50,7 +50,7 @@ object PeopleCommonStrings {
     // A person's card and the circles' lists (PersonCard, TalkPeopleControls).
 
     /** SampleNote, above the first card when any card is a sample. */
-    const val SAMPLE_NOTE = "Profiles marked Sample are demo profiles, not real attendees."
+    const val SAMPLE_NOTE = "Profiles marked Sample are sample profiles, not real attendees."
 
     /** The Sample pill: the visible word, its screen-reader name and its tooltip. */
     const val SAMPLE = "Sample"

@@ -37,6 +37,7 @@ import app.conferencecaddie.shared.people.PeopleUiState
 import app.conferencecaddie.ui.ShellRequest
 import app.conferencecaddie.ui.components.CaddieButton
 import app.conferencecaddie.ui.components.CaddieIconButton
+import app.conferencecaddie.ui.components.DemoNote
 import app.conferencecaddie.ui.components.LocalNarrowLayout
 import app.conferencecaddie.ui.components.LucideImage
 import app.conferencecaddie.ui.components.NeedsConnection
@@ -67,7 +68,7 @@ import kotlinx.coroutines.launch
 fun PeopleTab(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, online: Boolean, modifier: Modifier = Modifier) {
     Box(modifier.fillMaxSize()) {
         when {
-            !online -> PeopleOffline()
+            !online -> PeopleOffline(state.conference?.demo == true)
             state.sessionFailed -> PeopleSessionFailed(host)
             state.features.enabled && state.availability == PeopleAvailability.Ready -> Box(Modifier.fillMaxSize().testTag("people-home")) {
                 PeopleScreen(state, host, talks, host.request)
@@ -87,8 +88,8 @@ fun PeopleTab(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, online
 fun PeoplePageContent(page: PeoplePage, state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, online: Boolean) {
     when (page) {
         PeoplePage.Profile -> ProfileScreen(state, host, talks)
-        PeoplePage.Inbox -> if (online) InboxScreen(state, host) else PeopleOffline()
-        is PeoplePage.Meet -> if (online) key(page.meetId) { MeetScreen(page.meetId, state, host) } else PeopleOffline()
+        PeoplePage.Inbox -> if (online) InboxScreen(state, host) else PeopleOffline(state.conference?.demo == true)
+        is PeoplePage.Meet -> if (online) key(page.meetId) { MeetScreen(page.meetId, state, host) } else PeopleOffline(state.conference?.demo == true)
     }
 }
 
@@ -143,10 +144,11 @@ internal fun PeopleSessionFailed(host: PeopleHost, modifier: Modifier = Modifier
     }
 }
 
-/** The web's offline state of the People tab, Requests and Meet up. */
+/** The web's offline state of the People tab, Requests and Meet up, under a [demo] conference's note. */
 @Composable
-private fun PeopleOffline() {
+private fun PeopleOffline(demo: Boolean) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("people-offline")) {
+        DemoNote(demo, Modifier.padding(start = Caddie.dimens.gutter, end = Caddie.dimens.gutter, top = 4.dp))
         NeedsConnection(Strings.Offline.PEOPLE_TITLE, Strings.Offline.NEEDS_CONNECTION_BODY)
     }
 }

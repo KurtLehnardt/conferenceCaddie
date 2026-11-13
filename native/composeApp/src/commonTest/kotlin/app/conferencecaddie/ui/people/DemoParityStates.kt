@@ -23,9 +23,10 @@ import kotlinx.coroutines.delay
 // The parity screenshots of the "Demo" label: each screen where a demo conference's data shows, with
 // the summit published as a demo conference (ParityRig's demo), as the web's mock shows its demo
 // conference (web/src/mock/fixtures.ts, "Caddie Demo Conference"). The pill sits in the app bar,
-// in the switcher, at the top of each full talk card and in the talk sheet; the note sits at the top
-// of every screen of the conference and of the Import my schedule sheet. File names start with
-// demo-; the windows are a phone's, 390 x 844 and 320 x 700, light and dark.
+// in the switcher, at the top of each full talk card and For you card, and in the talk sheet; the
+// note sits at the top of every screen of the conference, of Settings' people groups and of the
+// Import my schedule sheet. File names start with demo-; the windows are a phone's, 390 x 844 and
+// 320 x 700, light and dark.
 
 /** The demo conference's name, as the web mock names it. */
 internal const val DEMO_CONFERENCE_NAME = "Caddie Demo Conference"
@@ -129,6 +130,16 @@ internal val DEMO_PARITY_STATES: List<ParityState> = listOf(
     ParityState("demo-meet", 844, 700, demo = true) {
         meetActive(sameZone = false)
         waitFor(hasTestTag(DEMO_NOTE_TAG))
+        shoot()
+    },
+    ParityState("demo-settings", 844, 700, demo = true) {
+        start()
+        settleCards()
+        openSettings()
+        waitFor(hasTestTag("set-blocked"))
+        // The people groups, with the note that opens them, at the top of the shot.
+        runCatching { onAllNodes(hasTestTag(DEMO_NOTE_TAG)).onFirst().performScrollTo() }
+        pause(600)
         shoot()
     },
     ParityState("demo-import", 844, 700, demo = true) {
