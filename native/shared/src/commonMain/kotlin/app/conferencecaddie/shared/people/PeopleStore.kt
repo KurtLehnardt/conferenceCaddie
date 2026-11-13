@@ -60,9 +60,21 @@ internal class PeopleStore(private val kv: PeopleKeyValue, val backend: String) 
 
     val profile: Profile? get() = profileMem
 
+    /**
+     * Holds [p] in memory and stores it. A write that fails puts the profile it replaced back in
+     * memory, unless something set another one meanwhile, so an edit reported as not saved is
+     * neither shown nor sent later; memory comes first, as for every other record, so a change made
+     * while the write is under way builds on this one.
+     */
     suspend fun setProfile(p: Profile?) {
+        val before = profileMem
         profileMem = p
-        write(KEY_PROFILE, p, Profile.serializer())
+        try {
+            write(KEY_PROFILE, p, Profile.serializer())
+        } catch (e: Throwable) {
+            if (profileMem === p) profileMem = before
+            throw e
+        }
     }
 
     val deleteAll: DeleteRetry? get() = deleteAllMem

@@ -89,7 +89,7 @@ fun SettingsScreen(
                     SettingsNavRow(
                         icon = LucideIcon.UserRound,
                         label = Strings.Settings.PROFILE,
-                        hint = state.profileName.ifBlank { Strings.Settings.SET_UP_PROFILE },
+                        hint = state.profileNote ?: state.profileName.ifBlank { Strings.Settings.SET_UP_PROFILE },
                         onClick = onOpenProfile,
                         first = true,
                     )

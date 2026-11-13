@@ -203,6 +203,19 @@ class PeopleHost(
     fun isRunning(key: String): Boolean = key in memory.running
 
     /**
+     * Profile's editor for [backend], made by [make] when there is none for it yet. It is kept in the
+     * memory, which outlives the activity's re-creation on Android ([PeopleRetained]) and Profile
+     * being left and opened again, but it is never saved: an edit the controller could not keep is
+     * still in its field afterwards, with its message, and no profile goes into saved state.
+     */
+    internal fun profileEditor(backend: String?, make: () -> ProfileEditor): ProfileEditor =
+        memory.profileEditor?.takeIf { memory.profileEditorBackend == backend }
+            ?: make().also {
+                memory.profileEditor = it
+                memory.profileEditorBackend = backend
+            }
+
+    /**
      * Starts [action] on [scope] as the action named [key], unless an action of that name is under
      * way: started here, or by a screen that has gone since (it was left and opened again, or the
      * activity was re-created). Returns false when it did not start. The names live in the memory,
@@ -347,6 +360,10 @@ class PeopleHostMemory {
 
     /** The meet-ups whose person "Save this person" saved ([PeopleHost.markMetSaved]). */
     internal var metSaved: Set<String> by mutableStateOf(emptySet())
+
+    // Profile's editor and the backend it edits for ([PeopleHost.profileEditor]). Not saved.
+    internal var profileEditor: ProfileEditor? = null
+    internal var profileEditorBackend: String? = null
 
     // The actions under way ([PeopleHost.launchOnce]). Not saved: an action ends with the process.
     // The atomic set is the one truth, changed from any thread; [changes] only tells a composition

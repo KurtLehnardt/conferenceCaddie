@@ -131,6 +131,12 @@ web's non-tab routes are. `ShellNavigation` keeps them as a stack (`ShellPage.Se
 goes back to it when it is already open, `back()` leaves the top one (the system Back and the iOS
 edge swipe do this), and `selectTab()` leaves them all. The app bar's Back follows the web: Settings,
 Requests and Meet up lead to the tab screen, and Profile's labelled "‹ Settings" leads to Settings.
+Profile opened over a tab screen (People's Profile button or "Create my profile", or an "Open
+profile" on another tab) says that tab's name instead ("‹ People", "‹ For you", "‹ Search" or
+"‹ Interested"), returns there and marks that tab meanwhile, as the web's Back does (`profileBack`
+in `web/src/lib/route.ts`, and `docs/CONTRACT.md`'s Navigation); opened by a link, or after a switch
+to another conference, it says Settings. The navigation saves where Profile was opened from with its
+pages.
 Requests and Meet up keep People selected in the tab bar. A caller that moves around the shell from
 outside it (a notification tap) makes the navigation with `rememberShellNavigation()` and passes it
 to `App()`.
@@ -187,12 +193,16 @@ host and anything presented from it follow it too.
 `ui/people` draws the web's people screens (`web/src/people`) on the shared `PeopleController`:
 
 - `PeopleTab.kt` puts them in the shell. `rememberPeopleUi()` collects the controller's state and
-  gives `App()` the People tab, the people pages, the people groups of Settings and the Requests
-  button with its badge, and the talk screens their slots (`TalkSheet`'s `peopleControls`,
-  `InterestedScreen`'s `shareAll`). The People tab shows only when the backend's capabilities and
-  the controller both have people features on. Offline, the People tab, Requests and Meet up show
-  the web's NeedsConnection; Profile and Settings still work. It also shows the people route of
-  the shell's `ShellRequest` once people features are on: every `caddie://` link, a tapped
+  gives `App()` the People tab, the people pages, the people groups of Settings, and the People tab's
+  app bar buttons (Requests with its badge, then Profile, as the web's People app bar has them;
+  offline in a window under 360 dp wide Requests steps aside, as on the web), and the talk screens
+  their slots (`TalkSheet`'s `peopleControls`, `InterestedScreen`'s `shareAll`). The People tab
+  shows only when the backend's capabilities and the controller both have people features on.
+  Offline, the People tab, Requests and Meet up show the web's NeedsConnection; Profile and Settings
+  still work. While the people records could not be opened, the People tab and Profile show the
+  same message with "Try again", and Settings' Profile row says so; an edit Profile could not keep
+  stays in its field with the controller's message. It also shows the people route of the shell's
+  `ShellRequest` once people features are on: every `caddie://` link, a tapped
   notification's (`caddie://people?around=1`, `caddie://inbox`, `caddie://meet/{id}`) included,
   goes through `IncomingHandoff` and `AppLink` in `CaddieApp`, and a people route
   (`AppLink.PeopleRoute`) opens People (with Around now), Requests, Meet up, Profile, or the

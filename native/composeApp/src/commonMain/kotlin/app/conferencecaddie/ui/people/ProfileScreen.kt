@@ -1,6 +1,7 @@
 package app.conferencecaddie.ui.people
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -37,6 +38,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import app.conferencecaddie.shared.people.ConferenceTopics
+import app.conferencecaddie.shared.people.PeopleAvailability
 import app.conferencecaddie.shared.people.PeopleController
 import app.conferencecaddie.shared.people.PeopleUiState
 import app.conferencecaddie.shared.people.Profile
@@ -53,12 +55,15 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Profile (web ProfileScreen.tsx, spec section 12; the Profile page, with the labelled "‹ Settings"
- * Back the shell draws). It works offline: everything is kept on this device and saved to the server
- * only while the profile is visible or shared. Top to bottom:
+ * Profile (web ProfileScreen.tsx, spec section 12; the Profile page, with the labelled Back the shell
+ * draws: "‹ Settings", or the name of the tab it was opened from). It works offline: everything is
+ * kept on this device and saved to the server only while the profile is visible or shared. While the
+ * people records could not be opened it is the People tab's message with "Try again" instead, and
+ * nothing while they open. Top to bottom:
  *
  * 1. The save status (`state.sync`: Saving…, Saved, or the error), right-aligned; edits save by
- *    themselves through `controller.updateProfile { ... }` and `controller.setTopics(...)`.
+ *    themselves through `controller.updateProfile { ... }` and `controller.setTopics(...)`, and an
+ *    edit this device could not keep shows their message here instead, its text left in the field.
  * 2. The pending-delete banner while `state.deletes.unfinished` ([PendingDeleteBanner]).
  * 3. The hidden banner while `state.visibility.hiddenForOwner` (EyeOff).
  * 4. "About you": Name (60) and About me (280).
@@ -79,25 +84,31 @@ import kotlinx.coroutines.sync.withLock
  */
 @Composable
 fun ProfileScreen(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, modifier: Modifier = Modifier) {
+    // While the records could not be opened, the People tab's message and "Try again", not fields
+    // whose edits nothing could keep. Until they are open there is no profile to edit either (the
+    // People tab shows nothing meanwhile): a draft typed over the empty profile would replace the
+    // stored one once they open.
+    if (state.sessionFailed) {
+        PeopleSessionFailed(host, modifier)
+        return
+    }
+    if (state.availability == PeopleAvailability.Loading) {
+        Box(modifier.fillMaxSize().testTag("profile-loading"))
+        return
+    }
+
     val controller = host.controller
     val scroll = rememberScrollState()
-    val editor = remember(controller) { ProfileEditor(controller, state.profile, state.topics) }
+    // Kept in the host's memory, so an edit that was not saved is still here after the activity's
+    // re-creation or when Profile is opened again; it takes what the controller holds now unless it
+    // has such an edit.
+    val slug = state.conference?.slug
+    val editor = remember(host, state.backend) {
+        host.profileEditor(state.backend) { ProfileEditor(controller, state.profile, state.topics, slug) }.also { it.adopt(state.profile, state.topics, slug) }
+    }
     // A change the user did not type (a delete clearing the device, another conference's topics)
-    // replaces what the fields show, once every edit has reached the controller.
-    LaunchedEffect(editor, state.profile, state.topics) { editor.adopt(state.profile, state.topics) }
-
-    // Edits are handed to the controller on the app's scope, so leaving the screen at once still
-    // saves the last keystroke.
-    fun edit(change: (ProfileDraft) -> ProfileDraft) {
-        editor.fields = change(editor.fields)
-        host.scope.launch { editor.push() }
-    }
-
-    fun setTopics(learn: List<TopicRef>? = null, speak: List<TopicRef>? = null) {
-        val t = editor.topics
-        editor.topics = ConferenceTopics(learn ?: t.learn, speak ?: t.speak)
-        host.scope.launch { editor.push() }
-    }
+    // replaces what the fields or the pickers show, once their edits have reached the controller.
+    LaunchedEffect(editor, state.profile, state.topics, slug) { editor.adopt(state.profile, state.topics, slug) }
 
     val visBusy = host.isRunning(VISIBILITY_ACTION)
     // The switch shows the requested state while the first save, which can take a second or two,
@@ -118,6 +129,33 @@ fun ProfileScreen(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, mo
     fun answer(message: String, show: (String) -> Unit) {
         if (shown.value) show(message) else host.showMessage(message)
     }
+
+    // Edits are handed to the controller on the app's scope, so leaving the screen at once still
+    // saves the last keystroke. An edit the controller could not keep stays in its field and the
+    // save status says so ([ProfileEditor.error]); once the screen has left, one toast says so.
+    // Every keystroke is handed over, in order (ProfileEditor.push), so none waits behind launchOnce.
+    fun save() {
+        host.scope.launch {
+            val message = editor.push() ?: return@launch
+            if (!shown.value && editor.tellOnce()) {
+                host.showToast(message, PeopleToastAction(PeopleCommonStrings.OPEN_PROFILE, host::openProfile))
+            }
+        }
+    }
+
+    fun edit(change: (ProfileDraft) -> ProfileDraft) {
+        editor.fields = change(editor.fields)
+        save()
+    }
+
+    fun setTopics(learn: List<TopicRef>? = null, speak: List<TopicRef>? = null) {
+        val t = editor.topics
+        editor.topics = ConferenceTopics(learn ?: t.learn, speak ?: t.speak)
+        save()
+    }
+
+    // An edit that was not saved is tried again when Profile shows again.
+    LaunchedEffect(editor) { if (editor.error != null) save() }
 
     fun toggleVisible(on: Boolean) {
         if (host.isRunning(VISIBILITY_ACTION)) return
@@ -167,7 +205,7 @@ fun ProfileScreen(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, mo
         modifier.fillMaxSize().imePadding().verticalScroll(scroll).padding(PeopleScreenPadding).testTag("profile-screen"),
         verticalArrangement = Arrangement.spacedBy(PeopleScreenGap),
     ) {
-        SaveStatus(state.sync)
+        SaveStatus(state.sync, editor.error)
         PendingDeleteBanner(state, host, onResult = { m -> answer(m) { deleteMessage = it } })
         if (state.visibility.hiddenForOwner) {
             PeopleBanner(LucideIcon.EyeOff, Modifier.testTag("profile-hidden-banner"), announce = true) {
@@ -325,7 +363,7 @@ fun ProfileScreen(state: PeopleUiState, host: PeopleHost, talks: PeopleTalks, mo
 
 /** The profile's free-text fields as the user typed them. */
 @Immutable
-private data class ProfileDraft(
+internal data class ProfileDraft(
     val displayName: String = "",
     val about: String = "",
     val interests: String = "",
@@ -351,38 +389,82 @@ private data class ProfileDraft(
  * What Profile's fields and topic pickers show, ahead of the controller: the controller's actions
  * are suspend functions, so a field bound to its state straight away would lose keystrokes typed
  * while one is on its way. Every edit lands here first and [push] hands the latest to the
- * controller, one at a time and in order.
+ * controller, one at a time and in order. An edit the controller could not keep stays here, unsent,
+ * and goes with the next push.
  */
 @Stable
-private class ProfileEditor(private val controller: PeopleController, profile: Profile, topics: ConferenceTopics) {
+internal class ProfileEditor(private val controller: PeopleController, profile: Profile, topics: ConferenceTopics, slug: String?) {
     var fields by mutableStateOf(ProfileDraft.of(profile))
     var topics by mutableStateOf(topics)
+
+    // The conference [topics] belong to: topics picked at one conference are never set at another.
+    private var topicsSlug = slug
+
+    /** The controller's message for the last edit it could not keep, until a push has handed every edit over. */
+    var error by mutableStateOf<String?>(null)
+        private set
     private var sentFields = fields
     private var sentTopics = topics
     private val mutex = Mutex()
 
-    /** Takes what the controller holds now, unless an edit has not reached it yet. */
-    fun adopt(profile: Profile, topics: ConferenceTopics) {
-        if (fields != sentFields || this.topics != sentTopics) return
-        val f = ProfileDraft.of(profile)
-        fields = f
-        sentFields = f
-        this.topics = topics
-        sentTopics = topics
+    // Whether a toast has said that an edit was not saved since the last one that was.
+    @kotlin.concurrent.Volatile
+    private var told = false
+
+    /** True the first time it is asked after an edit was not saved, for the one toast that says so. */
+    fun tellOnce(): Boolean {
+        if (told) return false
+        told = true
+        return true
     }
 
-    /** Hands the latest edits to the controller; returns once it has them. */
-    suspend fun push() = mutex.withLock {
+    /**
+     * Takes what the controller holds now for the fields, and for the topics of the conference
+     * [slug], each unless an edit of it has not reached the controller yet. The topics of another
+     * conference than the one picked at are replaced all the same (an edit of them is dropped), and
+     * so is everything once the profile was deleted: no text typed before a delete outlives it.
+     */
+    fun adopt(profile: Profile, topics: ConferenceTopics, slug: String?) {
+        val f = ProfileDraft.of(profile)
+        val wiped = f == ProfileDraft() && sentFields != ProfileDraft()
+        if (wiped || fields == sentFields) {
+            fields = f
+            sentFields = f
+        }
+        if (wiped || slug != topicsSlug || this.topics == sentTopics) {
+            this.topics = topics
+            sentTopics = topics
+            topicsSlug = slug
+        }
+        if (fields == sentFields && this.topics == sentTopics) {
+            error = null
+            told = false
+        }
+    }
+
+    /**
+     * Hands the latest edits to the controller; returns null once it has kept them, or its message
+     * when it could not ([error]), the edit then waiting for the next push.
+     */
+    suspend fun push(): String? = mutex.withLock {
         val f = fields
         if (f != sentFields) {
-            controller.updateProfile { f.applyTo(it) }
+            controller.updateProfile { f.applyTo(it) }?.let { return@withLock failed(it) }
             sentFields = f
         }
         val t = topics
         if (t != sentTopics) {
-            controller.setTopics(t.learn, t.speak)
+            controller.setTopics(t.learn, t.speak, conference = topicsSlug)?.let { return@withLock failed(it) }
             sentTopics = t
         }
+        error = null
+        told = false
+        null
+    }
+
+    private fun failed(message: String): String {
+        error = message
+        return message
     }
 }
 
@@ -401,13 +483,14 @@ private fun boldLead(lead: String, rest: String): AnnotatedString = buildAnnotat
 }
 
 /**
- * SaveStatus: "Saving…", "Saved" or the error, nothing while idle. On the web the error line is
- * `.pp-status.pp-error`, and `.pp-status` comes later in people.css, so it renders 13 sp in the
- * secondary colour like the other two, not in red; this keeps that.
+ * SaveStatus: "Saving…", "Saved" or the error, nothing while idle; [editError], an edit this device
+ * could not keep, comes before them. On the web the error line is `.pp-status.pp-error`, and
+ * `.pp-status` comes later in people.css, so it renders 13 sp in the secondary colour like the
+ * other two, not in red; this keeps that.
  */
 @Composable
-private fun SaveStatus(sync: SyncStatus) {
-    val text = when (sync.state) {
+private fun SaveStatus(sync: SyncStatus, editError: String?) {
+    val text = editError ?: when (sync.state) {
         SyncStatus.State.Saving -> ProfileStrings.SAVING
         SyncStatus.State.Saved -> ProfileStrings.SAVED
         SyncStatus.State.Error -> sync.message ?: ProfileStrings.COULD_NOT_SAVE

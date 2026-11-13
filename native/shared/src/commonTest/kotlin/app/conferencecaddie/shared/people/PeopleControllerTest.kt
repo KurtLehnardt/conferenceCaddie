@@ -119,6 +119,58 @@ class PeopleControllerTest {
     }
 
     @Test
+    fun aProfileEditThatCannotBeKeptReturnsTheMessageInsteadOfVanishing() = runTest {
+        val h = PeopleHarness(this)
+        val kv = FlakyKeyValue().apply { failReads = true }
+        val c = controllerOver(kv, h)
+        val ebpf = listOf(TopicRef("ebpf", "eBPF"))
+
+        // No context yet (the capabilities are loading): nothing to keep the edit in.
+        assertEquals(ProfileSync.GENERIC_MESSAGE, c.updateProfile { it.copy(displayName = "Caddie Native Test A") })
+
+        // The records cannot be opened: the edit and the topics say they were not saved.
+        c.updateContext(h.context())
+        runCurrent()
+        assertTrue(c.state.value.sessionFailed)
+        assertEquals(ProfileSync.GENERIC_MESSAGE, c.updateProfile { it.copy(displayName = "Caddie Native Test A") })
+        assertEquals(ProfileSync.GENERIC_MESSAGE, c.setTopics(ebpf, emptyList()))
+
+        // Once they open, nothing of those was kept; edits now are, and say nothing.
+        kv.failReads = false
+        assertTrue(c.retrySession())
+        assertEquals("", c.state.value.profile.displayName)
+        assertEquals(emptyList(), c.state.value.topics.learn)
+        assertNull(c.updateProfile { it.copy(displayName = "Caddie Native Test A") })
+        assertNull(c.setTopics(ebpf, emptyList()))
+        assertEquals("Caddie Native Test A", c.state.value.profile.displayName)
+        assertEquals(ebpf, c.state.value.topics.learn)
+
+        // Records that cannot be written: the generic line, not an exception and not silence, and
+        // the edit is not held either, so nothing sends or shows it later.
+        kv.failWrites = true
+        assertEquals(ProfileSync.GENERIC_MESSAGE, c.updateProfile { it.copy(about = "Not kept.") })
+        assertEquals("", c.state.value.profile.about)
+        kv.failWrites = false
+        assertNull(c.setTopics(emptyList(), ebpf))
+        assertEquals("", c.state.value.profile.about, "a later write does not carry the edit that failed")
+        assertEquals("Caddie Native Test A", c.state.value.profile.displayName)
+
+        // Topics picked for another conference than the one selected now are refused, not stored
+        // under this one.
+        assertEquals(ProfileSync.GENERIC_MESSAGE, c.setTopics(emptyList(), emptyList(), conference = "another-conference"))
+        assertEquals(ebpf, c.state.value.topics.speak)
+        assertNull(c.setTopics(ebpf, ebpf, conference = FIXTURE_SLUG))
+        assertEquals(ebpf, c.state.value.topics.learn)
+
+        // A backend without people features: the web's "does not offer that".
+        c.updateContext(h.context(PEOPLE_ON.copy(people = PEOPLE_ON.people.copy(enabled = false))))
+        runCurrent()
+        assertEquals(PeopleAvailability.Off, c.state.value.availability)
+        assertEquals(PeopleError.NOT_OFFERED_MESSAGE, c.updateProfile { it.copy(displayName = "Someone Else") })
+        c.close()
+    }
+
+    @Test
     fun aSessionIsOpenedOnceWhileItsRecordsAreStillBeingRead() = runTest {
         val h = PeopleHarness(this)
         val gate = CompletableDeferred<Unit>()

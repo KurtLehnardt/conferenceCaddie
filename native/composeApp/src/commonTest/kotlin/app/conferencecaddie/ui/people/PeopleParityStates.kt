@@ -550,6 +550,15 @@ internal val PARITY_STATES: List<ParityState> = listOf(
         pause(600)
         shoot()
     },
+    // Native only: Profile from the People tab's Profile button, whose Back says "‹ People".
+    ParityState("profile-from-people", 2629, 2870) {
+        start()
+        tapTag("profile-button", scroll = false)
+        waitFor(hasTestTag("profile-screen"))
+        waitSuggested()
+        pause(600)
+        shoot()
+    },
     ParityState("profile-topics", 2301, 2472) {
         start(tab = null)
         openProfile()
