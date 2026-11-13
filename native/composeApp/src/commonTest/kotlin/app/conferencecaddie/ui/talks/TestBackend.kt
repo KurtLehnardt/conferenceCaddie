@@ -61,8 +61,21 @@ class TestBackend(
         val vector: Int? = null,
     )
 
-    class TestConference(val slug: String, val name: String, val day: String, val talks: List<TestTalk>, val endDay: String = day) {
-        fun without(id: String) = TestConference(slug, name, day, talks.filter { it.id != id }, endDay)
+    /**
+     * A conference to publish. A [demo] one is listed and bundled as the demo conference is: with
+     * `"demo": true`, source "demo" and no official schedule link.
+     */
+    class TestConference(
+        val slug: String,
+        val name: String,
+        val day: String,
+        val talks: List<TestTalk>,
+        val endDay: String = day,
+        val demo: Boolean = false,
+    ) {
+        fun without(id: String) = TestConference(slug, name, day, talks.filter { it.id != id }, endDay, demo)
+
+        fun asDemo(name: String = this.name) = TestConference(slug, name, day, talks, endDay, demo = true)
     }
 
     val base = "https://caddie.test"
@@ -229,12 +242,13 @@ class TestBackend(
             put("virtual", false)
         }
         put("status", "searchable")
-        put("official_schedule_url", "https://caddie.test/${c.slug}/")
-        put("source", "sessionize")
+        if (c.demo) put("official_schedule_url", JsonNull) else put("official_schedule_url", "https://caddie.test/${c.slug}/")
+        put("source", if (c.demo) "demo" else "sessionize")
         put("has_level", false)
         put("track_group", "Track")
         put("tag_groups", JsonArray(emptyList()))
         put("talk_count", c.talks.count { it.kind == "talk" })
+        if (c.demo) put("demo", true)
     }
 
     // The topics of a conference: [topics] in the order given when the test names them, otherwise
@@ -277,7 +291,8 @@ class TestBackend(
                 put("sponsor", false)
                 put("has_slides", t.hasSlides)
                 put("slides_url", if (t.hasSlides) JsonPrimitive("https://caddie.test/slides/${t.id}.pdf") else JsonNull)
-                put("url", "https://caddie.test/${c.slug}/session/${t.id}")
+                // The demo conference's talks have no official page.
+                if (c.demo) put("url", JsonNull) else put("url", "https://caddie.test/${c.slug}/session/${t.id}")
                 put("start", "${t.day}T${hhmm(t.start)}:00Z")
                 put("end", "${t.day}T${hhmm(t.end)}:00Z")
                 put("day", t.day)
@@ -308,7 +323,8 @@ class TestBackend(
                 put("licensor", "Test Events")
                 put("license", "CC BY 3.0")
                 put("license_url", "https://creativecommons.org/licenses/by/3.0/")
-                put("source_url", "https://caddie.test/${c.slug}/")
+                // The schedule URL of the conference, which the demo conference does not have.
+                if (c.demo) put("source_url", JsonNull) else put("source_url", "https://caddie.test/${c.slug}/")
                 put("changes", "Reformatted.")
                 put("takedown", "https://caddie.test/takedown")
             }

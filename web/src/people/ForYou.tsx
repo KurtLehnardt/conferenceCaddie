@@ -4,6 +4,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { ChevronRight, ExternalLink, Sparkles, Star } from 'lucide-preact';
 import { fetchRecommendations, isAbort, PeopleApiError, type RecommendationBody } from './api';
 import { getProfile, hasProfileInput, topicsFor, usePeopleStore } from './storage';
+import { demoHeadingSuffix, demoPillFor } from '../components/demo';
 import { TalkPeopleControls } from './TalkPeopleControls';
 import type { ConferenceLike, InterestedProp, Recommendation, TalkLike } from './types';
 import { formatWhen, interestedIds, Marked, useVisibleTick } from './util';
@@ -208,7 +209,7 @@ export function ForYouRow({
                 <button
                   type="button"
                   class="pp-mini"
-                  onClick={() => (onOpenTalk ? onOpenTalk(asTalk(rec)) : window.open(rec.url, '_blank', 'noopener'))}
+                  onClick={() => (onOpenTalk ? onOpenTalk(asTalk(rec)) : rec.url && window.open(rec.url, '_blank', 'noopener'))}
                 >
                   <span class="pp-mini-title">{rec.title}</span>
                   <span class="pp-mini-when">{formatWhen(conference, rec.start)}</span>
@@ -261,9 +262,15 @@ export function ForYouScreen({
         <div class={`pp-list${view.refreshing ? ' is-refreshing' : ''}`} aria-busy={view.refreshing}>
           {state.results.map((rec) => {
             const on = marked.has(rec.talk_id);
+            // A demo conference's talk carries the Demo pill at the top, as a talk card does.
+            const demo = demoPillFor(conference);
             return (
               <article key={rec.talk_id} class="pp-talk-card">
-                <h3 class="pp-talk-title">{rec.title}</h3>
+                {demo && <p class="card-demo">{demo}</p>}
+                <h3 class="pp-talk-title">
+                  {rec.title}
+                  {demoHeadingSuffix(conference)}
+                </h3>
                 {rec.speakers?.length > 0 && <p class="pp-talk-speakers">{rec.speakers.join(', ')}</p>}
                 <p class="pp-talk-meta">
                   {formatWhen(conference, rec.start)}
@@ -284,10 +291,12 @@ export function ForYouScreen({
                   )}
                 </div>
                 <TalkPeopleControls conference={conference} talk={rec} interested={on} circleCount={rec.circle_count} />
-                <a class="link" href={rec.url} target="_blank" rel="noopener noreferrer">
-                  <ExternalLink size={16} aria-hidden="true" />
-                  Add to my schedule on the official site
-                </a>
+                {rec.url && (
+                  <a class="link" href={rec.url} target="_blank" rel="noopener noreferrer">
+                    <ExternalLink size={16} aria-hidden="true" />
+                    Add to my schedule on the official site
+                  </a>
+                )}
               </article>
             );
           })}

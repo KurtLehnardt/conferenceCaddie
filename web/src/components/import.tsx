@@ -10,6 +10,7 @@ import { CLIENT_EXTRACT, ExtractError, extractText, needsExtraction } from './ex
 import { ApiError, importSchedule, isAbort, type ImportConfidence, type ImportPayload, type ImportResponse } from '../api';
 import { useFocusTrap } from '../lib/focus';
 import { formatWhen, localDay, zoneOf } from '../lib/time';
+import { DemoNote } from './demo';
 import './import.css';
 
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -186,6 +187,7 @@ export function ImportSheet({
 
         {!result && (
           <div class="sheet-body imp-body" aria-busy={busy}>
+            <DemoNote conference={conference} />
             <p class="imp-lead">
               Have a schedule from the official site, a calendar or a spreadsheet? Find its talks at {conference.name} and
               mark them as Interested.
@@ -283,6 +285,7 @@ export function ImportSheet({
         {result && !done && (
           <>
             <div class="sheet-body imp-body">
+              <DemoNote conference={conference} />
               <p class="imp-summary" role="status">
                 {matched.length
                   ? `Found ${plural(matched.length, 'talk', 'talks')} at ${conference.name}.`

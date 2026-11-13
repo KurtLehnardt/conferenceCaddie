@@ -57,6 +57,7 @@ fun TalkSheet(
             onOpenLink = onOpenUrl,
             flat = true,
             modifier = Modifier.testTag("talk-sheet-card"),
+            demo = bundle.conference.demo,
             extra = if (talk.kind == "talk" || peopleControls != null) {
                 {
                     peopleControls?.invoke(talk)

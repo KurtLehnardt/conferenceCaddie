@@ -14,6 +14,8 @@ import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor
 import { useEffect, useState } from 'preact/hooks';
 import { isAbort, PeopleApiError, postSightings, putPresenceBle, rotateBleToken, type BleToken, type NearbyPerson, type Sighting } from './api';
 import { keepUntilOffered } from './capabilities';
+import { demoBody, demoTitle, isDemo } from '../components/demo';
+import { loadConferences } from '../lib/storage';
 import { isPresenceNotActive, lastPositionFix, presenceWrite, writeWhileOn } from './presence';
 import { getPresence, isBlocked, notify, usePeopleStore } from './storage';
 import type { PersonResult } from './types';
@@ -23,6 +25,29 @@ export const BLE_LABEL = 'Find people near me by Bluetooth (phone can stay in yo
 export const BLE_NOTICE =
   "Your phone broadcasts a random code that changes every 10 minutes and listens for others. Nothing about you is sent over Bluetooth; the code means something only to our server, only while you're around. Only people who also turned this on can be found, and you're told only about strong matches within a few metres.";
 export const NEARBY_TITLE = 'Conference Caddie';
+
+/** Whether [slug] is a demo conference, by the conference list kept on this device. */
+function isDemoSlug(slug: string): boolean {
+  return isDemo(loadConferences()?.find((c) => c.slug === slug));
+}
+
+/** The notification title for a conference: "Conference Caddie", or "Conference Caddie (Demo)" for a demo conference. */
+export function nearbyTitle(slug: string): string {
+  return demoTitle(NEARBY_TITLE, isDemoSlug(slug));
+}
+
+/**
+ * What the companion app's service is started with: the token, scanning on, presence's time left,
+ * and whether [slug] is a demo conference, so its ongoing notification says so.
+ */
+export function startOptions(slug: string, token: string): { token: string; scan: boolean; durationMs: number; demo: boolean } {
+  return { token, scan: true, durationMs: presenceDuration(slug), demo: isDemoSlug(slug) };
+}
+
+/** The notification body for a conference: [nearbyText], after "Demo: " for a demo conference. */
+export function nearbyBody(slug: string, evidence: string): string {
+  return demoBody(nearbyText(evidence), isDemoSlug(slug));
+}
 
 /** The notification body, word for word. */
 export function nearbyText(evidence: string): string {
@@ -47,7 +72,8 @@ interface CaddieBlePlugin {
   isAvailable(): Promise<{ available: boolean; enabled: boolean; extended: boolean; rationale: Record<string, string> }>;
   checkPermissions(): Promise<PermissionReport>;
   requestPermissions(): Promise<PermissionReport>;
-  start(options: { token: string; scan: boolean; durationMs: number }): Promise<void>;
+  /** [demo] makes the ongoing notification say it is a demo conference's, as every notification about one does. */
+  start(options: { token: string; scan: boolean; durationMs: number; demo: boolean }): Promise<void>;
   rotate(options: { token: string; durationMs?: number }): Promise<void>;
   stop(): Promise<void>;
   isRunning(): Promise<{ running: boolean }>;
@@ -308,7 +334,7 @@ async function onSightings(slug: string, sightings: Sighting[]): Promise<void> {
     if (!evidence) continue;
     recordNudge(slug, p.ref);
     try {
-      await CaddieBle.notify({ title: NEARBY_TITLE, body: nearbyText(evidence), data: `${slug}|${p.ref}` });
+      await CaddieBle.notify({ title: nearbyTitle(slug), body: nearbyBody(slug, evidence), data: `${slug}|${p.ref}` });
     } catch {
       // Notifications are off for the app; the Around now list still shows them.
     }
@@ -395,7 +421,7 @@ export async function startBle(slug: string): Promise<string | null> {
   if (!res) return 'Turn on being around first.';
   if (!res.ble?.token) return 'That could not be started. Please try again.';
   try {
-    await CaddieBle.start({ token: res.ble.token, scan: true, durationMs: presenceDuration(slug) });
+    await CaddieBle.start(startOptions(slug, res.ble.token));
   } catch (err) {
     void clearOnServer(slug);
     return describe(err);

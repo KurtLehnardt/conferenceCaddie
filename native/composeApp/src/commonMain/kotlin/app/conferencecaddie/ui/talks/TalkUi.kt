@@ -54,6 +54,7 @@ internal fun conferenceItem(c: IndexedConference): ConferenceItem {
         meta = listOfNotNull(range, place(conf).takeIf { it.isNotEmpty() }).joinToString(" · "),
         searchable = searchable,
         officialUrl = conf.officialScheduleUrl?.takeIf { isWebLink(it) },
+        demo = conf.demo,
     )
 }
 

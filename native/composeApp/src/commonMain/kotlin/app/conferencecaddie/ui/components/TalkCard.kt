@@ -51,7 +51,8 @@ data class CardLink(val label: String, val icon: LucideIcon, val url: String)
  * - [isEvent] draws the dashed card of a co-located event or showcase, which has no interest button;
  * - [links] at the bottom, opened through [onOpenLink]; only http(s) links are shown, so
  *   [onOpenLink] never receives another scheme; [onClick] makes the whole card open the talk;
- * - [extra] is drawn under the actions (related talks, for example).
+ * - [extra] is drawn under the actions (related talks, for example);
+ * - [demo] puts the Demo pill at the very top of the card, for a talk of a demo conference.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -72,6 +73,7 @@ fun TalkCard(
     onClick: (() -> Unit)? = null,
     flat: Boolean = false,
     extra: (@Composable ColumnScope.() -> Unit)? = null,
+    demo: Boolean = false,
 ) {
     val c = Caddie.colors
     val d = Caddie.dimens
@@ -88,6 +90,7 @@ fun TalkCard(
             .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 8.dp)
     }
     Column(base) {
+        if (showsDemoLabel(demo)) DemoPill(Modifier.padding(bottom = 6.dp))
         if (isEvent) {
             Row(
                 Modifier.background(c.surface, Pill).padding(horizontal = 8.dp, vertical = 2.dp),

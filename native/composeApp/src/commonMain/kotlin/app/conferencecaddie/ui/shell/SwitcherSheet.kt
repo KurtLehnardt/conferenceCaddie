@@ -2,6 +2,8 @@ package app.conferencecaddie.ui.shell
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -18,11 +20,14 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.conferencecaddie.shared.Demo
 import app.conferencecaddie.ui.components.CaddieSheet
+import app.conferencecaddie.ui.components.DemoPill
 import app.conferencecaddie.ui.components.Hairline
 import app.conferencecaddie.ui.components.LucideImage
 import app.conferencecaddie.ui.components.SectionHeading
 import app.conferencecaddie.ui.components.caddieClickable
+import app.conferencecaddie.ui.components.showsDemoLabel
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
@@ -64,6 +69,7 @@ fun SwitcherSheet(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ConferenceRow(
     c: ConferenceItem,
@@ -80,18 +86,26 @@ private fun ConferenceRow(
             .caddieClickable(RoundedCornerShape(8.dp), onClick = onClick)
             .semantics(mergeDescendants = true) {
                 selected = current
-                if (linkOut) contentDescription = c.name + Strings.Switcher.OPENS_OFFICIAL
+                if (linkOut) contentDescription = c.name + (if (showsDemoLabel(c.demo)) ", ${Demo.SPOKEN}" else "") + Strings.Switcher.OPENS_OFFICIAL
             }
             .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Text(
-                c.name,
-                style = Caddie.type.body.copy(fontWeight = FontWeight.SemiBold, lineHeight = Caddie.type.cardTitle.lineHeight),
-                color = if (current) colors.accentInk else colors.text,
-            )
+            // A demo conference's pill follows its name, on the same line while both fit.
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+                itemVerticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    c.name,
+                    style = Caddie.type.body.copy(fontWeight = FontWeight.SemiBold, lineHeight = Caddie.type.cardTitle.lineHeight),
+                    color = if (current) colors.accentInk else colors.text,
+                )
+                if (showsDemoLabel(c.demo)) DemoPill(spoken = !linkOut)
+            }
             if (c.meta.isNotEmpty()) Text(c.meta, style = Caddie.type.note, color = colors.text2)
         }
         if (trailing != null) {

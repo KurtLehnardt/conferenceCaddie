@@ -94,13 +94,21 @@ internal class ParityState(
     /** Extra windows beyond 390 and 320 wide (name suffix to window), shot in the light theme only. */
     val extras: Map<String, ParityWindow> = emptyMap(),
     val ble: Boolean = false,
+    /** Publishes the summit as a demo conference (DemoParityStates), with a real conference after it in the list. */
+    val demo: Boolean = false,
     val drive: ParityRun.() -> Unit,
 )
 
-/** The people, server, controller and app of one screenshot run; with [ble], a phone with a (fake) Bluetooth radio. */
+/**
+ * The people, server, controller and app of one screenshot run; with [ble], a phone with a (fake)
+ * Bluetooth radio; with [demo], the summit is published as a demo conference ("demo": true, named
+ * as the web mock's demo conference) and a real conference follows it in the switcher.
+ */
 @OptIn(ExperimentalTestApi::class)
-internal class ParityRig(val ble: Boolean = false) {
-    val backend = TestBackend(people = true, topics = ParitySample.TOPICS, push = true, ble = ble).also { it.publish(listOf(ParitySample.testConference())) }
+internal class ParityRig(val ble: Boolean = false, val demo: Boolean = false) {
+    val backend = TestBackend(people = true, topics = ParitySample.TOPICS, push = true, ble = ble).also {
+        it.publish(if (demo) listOf(ParitySample.testConference().asDemo(DEMO_CONFERENCE_NAME), it.alpha) else listOf(ParitySample.testConference()))
+    }
 
     /** Fixed at [ParitySample.pinnedNowMs] for the core, the app, the controller and the fake server alike. */
     val clock = TestClock(ParitySample.pinnedNowMs(backend.bundleOf(ParitySample.testConference()).conference))
@@ -472,7 +480,7 @@ class PeopleParityShots {
     fun parityScreenshots() {
         val only = parityShotsRequested() ?: return
         val failures = ArrayList<String>()
-        for (state in PARITY_STATES + PARITY_FIX_STATES) {
+        for (state in PARITY_STATES + PARITY_FIX_STATES + DEMO_PARITY_STATES) {
             val wanted = only.isEmpty() || state.name in only
             if (!wanted) continue
             val windows = buildList {
@@ -483,7 +491,7 @@ class PeopleParityShots {
             for ((file, window, both) in windows) {
                 try {
                     runParityShot(window) { camera ->
-                        val rig = ParityRig(ble = state.ble)
+                        val rig = ParityRig(ble = state.ble, demo = state.demo)
                         try {
                             ParityRun(this, rig, camera, file, both).apply(state.drive)
                         } finally {

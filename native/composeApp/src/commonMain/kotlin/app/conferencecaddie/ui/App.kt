@@ -1,6 +1,7 @@
 package app.conferencecaddie.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
@@ -62,6 +63,8 @@ import app.conferencecaddie.ui.components.AppBarBack
 import app.conferencecaddie.ui.components.AppBarLabeledBack
 import app.conferencecaddie.ui.components.AppBarTitle
 import app.conferencecaddie.ui.components.CaddieIconButton
+import app.conferencecaddie.ui.components.DemoNote
+import app.conferencecaddie.ui.components.DemoPill
 import app.conferencecaddie.ui.components.NavBar
 import app.conferencecaddie.ui.components.NavItem
 import app.conferencecaddie.ui.components.NeedsConnection
@@ -69,6 +72,7 @@ import app.conferencecaddie.ui.components.OfflineBadge
 import app.conferencecaddie.ui.components.StateAction
 import app.conferencecaddie.ui.components.StateView
 import app.conferencecaddie.ui.components.SwitcherButton
+import app.conferencecaddie.ui.components.showsDemoLabel
 import app.conferencecaddie.ui.components.Toast
 import app.conferencecaddie.ui.icons.LucideIcon
 import app.conferencecaddie.ui.shell.ConnectConfirmation
@@ -360,13 +364,21 @@ private fun ShellAppBar(
     AppBar(
         modifier = modifier,
         title = {
-            if (page != null) {
+            if (page is PeoplePage && showsDemoLabel(state.selectedConference?.demo)) {
+                // Profile, Requests and Meet up belong to the conference, so a demo one's pill
+                // follows their title, as the web's does; Settings has none.
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.weight(1f, fill = false)) { AppBarTitle(pageTitle(page)) }
+                    DemoPill()
+                }
+            } else if (page != null) {
                 AppBarTitle(pageTitle(page))
             } else {
                 SwitcherButton(
                     name = state.selectedConference?.name
                         ?: if (state.conferences != null) Strings.AppBar.CHOOSE_CONFERENCE else Strings.APP_NAME,
                     onClick = { navigation.switcherOpen = true },
+                    demo = state.selectedConference?.demo == true,
                 )
             }
         },
@@ -437,8 +449,8 @@ private fun navItem(tab: Tab, state: ShellState): NavItem<Tab> = when (tab) {
 private fun TabBody(tab: Tab, state: ShellState, content: TabContent) {
     Box(Modifier.fillMaxSize().testTag("tab-body-${tab.name}")) {
         when (tab) {
-            Tab.People -> content.people?.invoke() ?: PeoplePlaceholder(state.online)
-            Tab.ForYou -> content.forYou?.invoke() ?: ForYouPlaceholder(state.online)
+            Tab.People -> content.people?.invoke() ?: PeoplePlaceholder(state.online, demo = state.selectedConference?.demo == true)
+            Tab.ForYou -> content.forYou?.invoke() ?: ForYouPlaceholder(state.online, demo = state.selectedConference?.demo == true)
             Tab.Search -> content.search?.invoke() ?: PlaceholderScreen(LucideIcon.Search, null, Strings.Search.PLACEHOLDER)
             Tab.Interested -> content.interested?.invoke() ?: InterestedPlaceholder()
         }
@@ -452,31 +464,51 @@ private fun PlaceholderScreen(icon: LucideIcon, title: String?, body: String?) {
     }
 }
 
-/** People until its screens arrive (phase 3), or the web's offline state. */
+/** People until its screens arrive (phase 3), or the web's offline state; a [demo] conference's note comes first. */
 @Composable
-fun PeoplePlaceholder(online: Boolean) {
+fun PeoplePlaceholder(online: Boolean, demo: Boolean = false) {
     if (!online) {
-        NeedsConnection(Strings.Offline.PEOPLE_TITLE)
+        DemoNeedsConnection(Strings.Offline.PEOPLE_TITLE, demo)
     } else {
-        PlaceholderScreen(LucideIcon.Users, Strings.People.PLACEHOLDER_TITLE, Strings.People.PLACEHOLDER_BODY)
+        DemoAbove(demo) { PlaceholderScreen(LucideIcon.Users, Strings.People.PLACEHOLDER_TITLE, Strings.People.PLACEHOLDER_BODY) }
     }
 }
 
-/** For you until on-device suggestions arrive (phase 2b), or the web's offline state. */
+/** For you until on-device suggestions arrive (phase 2b), or the web's offline state; a [demo] conference's note comes first. */
 @Composable
-fun ForYouPlaceholder(online: Boolean) {
+fun ForYouPlaceholder(online: Boolean, demo: Boolean = false) {
     if (!online) {
-        NeedsConnection(Strings.ForYou.NEEDS_CONNECTION_TITLE)
+        DemoNeedsConnection(Strings.ForYou.NEEDS_CONNECTION_TITLE, demo)
     } else {
-        PlaceholderScreen(LucideIcon.Sparkles, Strings.ForYou.PICK_TITLE, Strings.ForYou.LEDE)
+        DemoAbove(demo) { PlaceholderScreen(LucideIcon.Sparkles, Strings.ForYou.PICK_TITLE, Strings.ForYou.LEDE) }
+    }
+}
+
+/**
+ * The web's NeedsConnection with a [demo] conference's note above it, as the web shows the note
+ * above every screen of the conference.
+ */
+@Composable
+private fun DemoNeedsConnection(title: String, demo: Boolean, body: String = Strings.Offline.NEEDS_CONNECTION_BODY) {
+    DemoAbove(demo) { NeedsConnection(title, body) }
+}
+
+/** [content] under a [demo] conference's note, which takes the screen's gutter; [content] alone otherwise. */
+@Composable
+private fun DemoAbove(demo: Boolean, content: @Composable () -> Unit) {
+    if (!demo) return content()
+    Column(Modifier.fillMaxSize()) {
+        DemoNote(true, Modifier.padding(start = Caddie.dimens.gutter, end = Caddie.dimens.gutter, top = 4.dp))
+        Box(Modifier.weight(1f)) { content() }
     }
 }
 
 /** The web's empty Interested list (web/src/components/interested.tsx). */
 @Composable
-fun InterestedPlaceholder() {
+fun InterestedPlaceholder(demo: Boolean = false) {
     val nav = LocalShellNavigator.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        DemoNote(demo, Modifier.padding(start = Caddie.dimens.gutter, end = Caddie.dimens.gutter, top = 4.dp))
         // .screen-head and .screen-title (web/src/components/schedule.css).
         Text(
             Strings.Interested.TITLE,

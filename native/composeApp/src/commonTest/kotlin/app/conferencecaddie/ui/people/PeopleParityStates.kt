@@ -38,7 +38,7 @@ internal fun extras(tall: Int) = mapOf(
 )
 
 @OptIn(ExperimentalTestApi::class)
-private fun ParityRun.pause(ms: Long) {
+internal fun ParityRun.pause(ms: Long) {
     runCatching { waitUntil(timeoutMillis = ms) { false } }
 }
 
@@ -89,7 +89,7 @@ private fun ParityRun.watchDevon() {
 
 /** Presence on through the panel in [zone], with Sawyer (the broad match) joining me there. */
 @OptIn(ExperimentalTestApi::class)
-private fun ParityRun.aroundIn(zone: String, spot: String = "") {
+internal fun ParityRun.aroundIn(zone: String, spot: String = "") {
     start()
     settleCards()
     await { sawyerJoins(zone) }
@@ -133,7 +133,7 @@ private fun iso(ms: Long): String = Instant.fromEpochMilliseconds(ms).toString()
 
 /** I'm around in [zone]; Blake asks me; Requests is open. */
 @OptIn(ExperimentalTestApi::class)
-private fun ParityRun.inboxWithBlake(zone: String, devon: Boolean = false): String {
+internal fun ParityRun.inboxWithBlake(zone: String, devon: Boolean = false): String {
     var id = ""
     start(prepare = {
         presence(zone)
@@ -164,7 +164,7 @@ private suspend fun ParityRun.devonAsked(): String = rig.locked {
 
 /** The active meet with Blake, accepted from Requests, me in [zone] (with my position in the Hallway). */
 @OptIn(ExperimentalTestApi::class)
-private fun ParityRun.meetActive(sameZone: Boolean) {
+internal fun ParityRun.meetActive(sameZone: Boolean) {
     val zone = if (sameZone) "Expo hall" else "Hallway"
     var id = ""
     start(prepare = {
@@ -797,7 +797,7 @@ private fun ParityRun.bleSwitch() {
  * shows only after its debounce (ProfileTopicPicker), so the shot has them as the web's has.
  */
 @OptIn(ExperimentalTestApi::class)
-private fun ParityRun.waitSuggested() = waitFor(hasText(ProfileStrings.SUGGESTED_FOR_YOU, ignoreCase = true))
+internal fun ParityRun.waitSuggested() = waitFor(hasText(ProfileStrings.SUGGESTED_FOR_YOU, ignoreCase = true))
 
 /** I'm around in the Expo hall, back after twenty minutes: "Still in Expo hall?" (scenarios.mjs still-in). */
 @OptIn(ExperimentalTestApi::class)

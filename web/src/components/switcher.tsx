@@ -3,6 +3,7 @@ import { Check, ChevronDown, ExternalLink, X } from 'lucide-preact';
 import type { Conference } from '../types';
 import { useFocusTrap } from '../lib/focus';
 import { formatDateRange } from '../lib/time';
+import { DemoPill, demoPillFor } from './demo';
 
 function place(c: Conference): string {
   const loc = c.location;
@@ -11,11 +12,15 @@ function place(c: Conference): string {
   return [loc.city, loc.country].filter(Boolean).join(', ');
 }
 
-/** The app bar title: the current conference's name with a chevron that opens the switcher. */
-export function SwitcherButton({ name, onOpen }: { name: string; onOpen: () => void }) {
+/**
+ * The app bar title: the current conference's name with a chevron that opens the switcher. A demo
+ * conference has the Demo pill right after its name.
+ */
+export function SwitcherButton({ name, demo = false, onOpen }: { name: string; demo?: boolean; onOpen: () => void }) {
   return (
     <button type="button" class="switcher-btn" onClick={onOpen} aria-haspopup="dialog">
       <span class="switcher-name">{name}</span>
+      <DemoPill demo={demo} />
       <ChevronDown size={20} aria-hidden="true" />
       <span class="sr-only">, change conference</span>
     </button>
@@ -70,7 +75,10 @@ export function SwitcherSheet({
                     onClick={() => onPick(c.slug)}
                   >
                     <span class="conf-text">
-                      <span class="conf-name">{c.name}</span>
+                      <span class="conf-name-row">
+                        <span class="conf-name">{c.name}</span>
+                        {demoPillFor(c)}
+                      </span>
                       <span class="conf-meta">
                         {[formatDateRange(c.start_date, c.end_date), place(c)].filter(Boolean).join(' · ')}
                       </span>
@@ -87,20 +95,33 @@ export function SwitcherSheet({
                 Schedule not available here yet
               </h3>
               <ul class="conf-list">
-                {unavailable.map((c) => (
-                  <li key={c.slug}>
-                    <a class="conf-row" href={c.official_schedule_url} target="_blank" rel="noopener noreferrer">
-                      <span class="conf-text">
+                {unavailable.map((c) => {
+                  const text = (
+                    <span class="conf-text">
+                      <span class="conf-name-row">
                         <span class="conf-name">{c.name}</span>
-                        <span class="conf-meta">
-                          {[formatDateRange(c.start_date, c.end_date), place(c)].filter(Boolean).join(' · ')}
-                        </span>
+                        {demoPillFor(c)}
                       </span>
-                      <ExternalLink size={18} class="conf-check" aria-hidden="true" />
-                      <span class="sr-only">, opens the official schedule in a new tab</span>
-                    </a>
-                  </li>
-                ))}
+                      <span class="conf-meta">
+                        {[formatDateRange(c.start_date, c.end_date), place(c)].filter(Boolean).join(' · ')}
+                      </span>
+                    </span>
+                  );
+                  // A conference without an official schedule page (a demo conference) is listed without a link.
+                  return (
+                    <li key={c.slug}>
+                      {c.official_schedule_url ? (
+                        <a class="conf-row" href={c.official_schedule_url} target="_blank" rel="noopener noreferrer">
+                          {text}
+                          <ExternalLink size={18} class="conf-check" aria-hidden="true" />
+                          <span class="sr-only">, opens the official schedule in a new tab</span>
+                        </a>
+                      ) : (
+                        <div class="conf-row conf-row-static">{text}</div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </section>
           )}

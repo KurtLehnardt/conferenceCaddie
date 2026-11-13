@@ -1,5 +1,6 @@
 package app.conferencecaddie.shared.people
 
+import app.conferencecaddie.shared.Demo
 import app.conferencecaddie.shared.Notifier
 import kotlin.math.max
 import kotlin.time.Clock
@@ -45,6 +46,9 @@ internal interface ConnectHost {
 
     /** True when the backend offers presence (`people.presence`). */
     fun presenceOn(): Boolean
+
+    /** True when [slug] is a demo conference, so a notification about it says so. */
+    fun demo(slug: String): Boolean
 }
 
 /**
@@ -473,7 +477,11 @@ internal class ConnectRuntime(
         recordNudge(slug, p.ref)
         current = nudge
         host.changed()
-        if (notify) host.notifier.show(NUDGE_NOTIFICATION_ID, NOTIFICATION_TITLE, nudge.text, NUDGE_DEEP_LINK)
+        if (notify) {
+            // A demo conference's notification says so in its title and at the start of its body.
+            val demo = host.demo(slug)
+            host.notifier.show(NUDGE_NOTIFICATION_ID, Demo.notificationTitle(NOTIFICATION_TITLE, demo), Demo.notificationBody(nudge.text, demo), NUDGE_DEEP_LINK)
+        }
     }
 
     companion object {

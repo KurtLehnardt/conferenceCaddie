@@ -383,7 +383,11 @@ class PeopleController(
         val r = ready()?.takeIf { it.features.presence } ?: return@write PeopleError.NOT_OFFERED_MESSAGE
         // A write without `ble` leaves Bluetooth as it is on the server; a new until reaches the
         // radio through PresenceHost.presenceChanged.
-        r.s.presenceRuntime.turnOn(r.slug, zone, spot, mode ?: r.s.presenceRuntime.get(r.slug).mode).also { publish() }
+        r.s.presenceRuntime.turnOn(r.slug, zone, spot, mode ?: r.s.presenceRuntime.get(r.slug).mode).also {
+            // After the turn-on, so the record holds presence and keeps the mark with it.
+            if (it == null) r.s.rememberDemo(r.slug)
+            publish()
+        }
     }
 
     /** "Extend": keeps the zone and spot and starts a fresh hour (or renews the day). */
@@ -413,7 +417,10 @@ class PeopleController(
      */
     suspend fun turnOnBluetooth(): BleOutcome = write(BleOutcome.Problem(BleProblem.Failed, PeopleText.BLE_START_FAILED)) {
         val r = ready()?.takeIf { it.features.presence } ?: return@write BleOutcome.Problem(BleProblem.Unsupported, PeopleText.BLE_UNSUPPORTED)
-        r.s.ble.turnOn(r.slug).also { publish() }
+        r.s.ble.turnOn(r.slug).also {
+            if (it == BleOutcome.On) r.s.rememberDemo(r.slug)
+            publish()
+        }
     }
 
     /** Turns Bluetooth proximity off at the selected conference and tells the server (`ble: false`); presence stays. */
@@ -972,6 +979,28 @@ class PeopleController(
         override fun meets(): Boolean = context?.let { featuresOf(it).meets } == true
 
         override fun presenceOn(): Boolean = context?.let { featuresOf(it).presence } == true
+
+        override fun demo(slug: String): Boolean = contextDemo(slug) ?: store.record(slug).demo
+
+        /**
+         * Whether the context names [slug] as a demo conference: the selected conference, else the
+         * backend's list; null when neither names it (the list is not loaded yet, for example).
+         */
+        private fun contextDemo(slug: String): Boolean? {
+            val ctx = context?.takeIf { it.backend == backend } ?: return null
+            return (ctx.conference?.takeIf { it.slug == slug } ?: ctx.listed.firstOrNull { it.slug == slug })?.demo
+        }
+
+        /**
+         * Keeps on the device whether [slug] is a demo conference, as the context says now, so its
+         * notifications still say so later when the context does not name it ([demo]). Called after
+         * presence or Bluetooth turned on, when the record holds that state: the mark alone never
+         * keeps a record ([ConferenceRecord.isEmpty]).
+         */
+        suspend fun rememberDemo(slug: String) {
+            val demo = contextDemo(slug) ?: return
+            if (store.record(slug).demo != demo) store.update(slug) { it.copy(demo = demo) }
+        }
 
         override fun presence(slug: String): Presence = presenceRuntime.get(slug)
 

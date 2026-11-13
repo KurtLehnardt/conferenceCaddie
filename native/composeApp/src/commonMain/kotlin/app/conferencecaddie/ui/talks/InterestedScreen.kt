@@ -26,10 +26,12 @@ import app.conferencecaddie.shared.bundle.Talk
 import app.conferencecaddie.shared.bundle.TalkBundle
 import app.conferencecaddie.shared.bundle.TalkTime
 import app.conferencecaddie.ui.InterestedPlaceholder
+import app.conferencecaddie.ui.components.DemoNote
 import app.conferencecaddie.ui.components.NoteText
 import app.conferencecaddie.ui.components.SectionHeading
 import app.conferencecaddie.ui.components.SegmentOption
 import app.conferencecaddie.ui.components.Segmented
+import app.conferencecaddie.ui.components.showsDemoLabel
 import app.conferencecaddie.ui.strings.Strings
 import app.conferencecaddie.ui.theme.Caddie
 
@@ -72,7 +74,7 @@ fun InterestedScreen(
     val talkIds = talks.map { it.talkId }
     LaunchedEffect(prefetchCounts, talkIds) { if (talkIds.isNotEmpty()) prefetchCounts?.invoke(talkIds) }
     if (talks.isEmpty()) {
-        InterestedPlaceholder()
+        InterestedPlaceholder(demo = bundle.conference.demo)
         return
     }
     val tz = bundle.conference.timeZone
@@ -88,6 +90,9 @@ fun InterestedScreen(
         Modifier.fillMaxSize().testTag("interested-screen"),
         contentPadding = PaddingValues(bottom = 24.dp),
     ) {
+        if (showsDemoLabel(bundle.conference.demo)) {
+            item("demo") { DemoNote(true, Modifier.padding(start = Caddie.dimens.gutter, end = Caddie.dimens.gutter, top = 4.dp)) }
+        }
         item("head") {
             // .screen-head: the title, and the List or Day switch 168 dp wide on its right.
             Row(

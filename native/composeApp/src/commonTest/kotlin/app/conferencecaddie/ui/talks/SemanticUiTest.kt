@@ -46,7 +46,7 @@ import kotlinx.io.files.SystemTemporaryDirectory
  * Answers fixed vectors by query, so the screens' ranking can be checked by hand against
  * TestBackend's talks (1: e0, 3: e1, 4: e2). An unknown query gets a zero vector.
  */
-private class FixedEmbedder(private val vectors: Map<String, Int>) : Embedder {
+internal class FixedEmbedder(private val vectors: Map<String, Int>) : Embedder {
     override val modelId = BgeEmbedder.MODEL_ID
     override val dimensions = 384
     override suspend fun embed(texts: List<String>): List<FloatArray> = texts.map { input ->

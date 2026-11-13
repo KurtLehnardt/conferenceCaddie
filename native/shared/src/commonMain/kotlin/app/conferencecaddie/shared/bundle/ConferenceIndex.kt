@@ -27,6 +27,12 @@ data class Conference(
     val trackGroup: String?,
     val tagGroups: List<String>,
     val talkCount: Int,
+    /**
+     * True only when the entry carries `"demo": true`: a demo conference with invented talks and
+     * speakers, which every screen labels "Demo". A missing field, or any other value, is a real
+     * conference.
+     */
+    val demo: Boolean = false,
 ) {
     data class Location(val city: String, val region: String, val country: String, val virtual: Boolean)
 
@@ -74,6 +80,7 @@ data class Conference(
                 trackGroup = trackGroup.value,
                 tagGroups = o["tag_groups"].asArray()!!.map { it.asString()!! },
                 talkCount = talkCount.toInt(),
+                demo = o["demo"].isTrue(),
             )
         }
 

@@ -38,18 +38,15 @@ import { SettingsScreen } from './components/settings';
 import { InstallCard, offerInstallOnce } from './components/install';
 import { SwitcherButton, SwitcherSheet } from './components/switcher';
 import { TalkCard } from './components/talk';
+import { DEMO_HEADING_SUFFIX, DemoNote, DemoPill, demoName, isDemo } from './components/demo';
 import {
-  BlockedPeople,
   ForYouScreen,
   InboxScreen,
   MeetScreen,
-  NudgeSetting,
-  NudgeSettings,
-  PeopleIMet,
-  PeopleIWatch,
   PeopleScreen,
   ProfileButton,
   ProfileScreen,
+  SettingsPeopleGroups,
   onInterestedChanged,
   registerPeopleUi,
   resyncPush,
@@ -94,7 +91,14 @@ function TalkSheet({
   if (!talk) return null;
   return (
     <div class="scrim" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div class="sheet" role="dialog" aria-modal="true" aria-label={talk.title} ref={ref} tabIndex={-1}>
+      <div
+        class="sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-label={isDemo(conference) ? talk.title + DEMO_HEADING_SUFFIX : talk.title}
+        ref={ref}
+        tabIndex={-1}
+      >
         <div class="sheet-handle" aria-hidden="true" />
         <header class="sheet-header">
           <h2>Talk</h2>
@@ -259,8 +263,8 @@ export function App() {
   }, [slug]);
 
   useEffect(() => {
-    document.title = conference ? `${conference.name} · Conference Caddie` : 'Conference Caddie';
-  }, [conference?.name]);
+    document.title = conference ? `${demoName(conference.name, isDemo(conference))} · Conference Caddie` : 'Conference Caddie';
+  }, [conference?.name, conference?.demo]);
 
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -512,20 +516,33 @@ export function App() {
     </a>
   ) : null;
 
+  // A demo conference shows the Demo pill after its name on the tab screens, and after the title of
+  // the people pages (Profile, Requests and Meet up), which belong to that conference. Settings has none.
+  const demo = isDemo(conference);
   const title = isTabScreen ? (
     <SwitcherButton
       name={conference?.name ?? (conferences ? 'Choose a conference' : 'Conference Caddie')}
+      demo={demo}
       onOpen={() => {
         setToast(null);
         setSwitcherOpen(true);
       }}
     />
   ) : tab === 'profile' ? (
-    'Profile'
+    <>
+      Profile
+      <DemoPill demo={demo} />
+    </>
   ) : tab === 'inbox' ? (
-    'Requests'
+    <>
+      Requests
+      <DemoPill demo={demo} />
+    </>
   ) : tab === 'meet' ? (
-    'Meet up'
+    <>
+      Meet up
+      <DemoPill demo={demo} />
+    </>
   ) : (
     'Settings'
   );
@@ -601,10 +618,12 @@ export function App() {
         <CalendarX size={40} class="state-icon" aria-hidden="true" />
         <p class="state-title">Schedule not available here yet</p>
         <p class="state-body">{conference.name} can't be searched here yet. Its schedule is on the official site.</p>
-        <a class="btn btn-tonal" href={conference.official_schedule_url} target="_blank" rel="noopener noreferrer">
-          <ExternalLink size={18} aria-hidden="true" />
-          Open the official schedule
-        </a>
+        {conference.official_schedule_url && (
+          <a class="btn btn-tonal" href={conference.official_schedule_url} target="_blank" rel="noopener noreferrer">
+            <ExternalLink size={18} aria-hidden="true" />
+            Open the official schedule
+          </a>
+        )}
       </div>
     );
   }
@@ -626,12 +645,16 @@ export function App() {
                 setToast(null);
                 setImportOpen(true);
               }}
-              people={searchable ? <><BlockedPeople conference={searchable} /><PeopleIMet conference={searchable} /><PeopleIWatch conference={searchable} /><NudgeSetting conference={searchable} /><NudgeSettings conference={searchable} /></> : null}
+              people={searchable ? <SettingsPeopleGroups conference={searchable} /> : null}
             />
           ) : !searchable ? (
             blocker()
           ) : (
             <>
+              {/* Every screen of a demo conference opens with the Demo pill and its note: People (and
+                  Around now), For you, Search (above the Search and Schedule switch, so both views
+                  have it), Interested, Profile, Requests and Meet up. */}
+              <DemoNote conference={searchable} />
               {!online && (tab === 'people' || tab === 'here' || tab === 'for-you' || tab === 'inbox' || tab === 'meet') && (
                 <NeedsConnection
                   title={tab === 'for-you' ? 'Suggestions need a connection' : 'People to meet needs a connection'}

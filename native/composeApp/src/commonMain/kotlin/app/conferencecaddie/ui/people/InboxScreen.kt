@@ -68,7 +68,7 @@ fun InboxScreen(state: PeopleUiState, host: PeopleHost, modifier: Modifier = Mod
     val outgoing = inbox.outgoing.filter { it.state.isOpen }
     val now = rememberNowMs(host, active = incoming.isNotEmpty())
 
-    PeopleScreenColumn(modifier.testTag("inbox-screen")) {
+    PeopleScreenColumn(modifier.testTag("inbox-screen"), demo = state.conference?.demo == true) {
         // .pp-section: 10 dp between its parts.
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             SectionHead(ConnectStrings.REQUESTS)

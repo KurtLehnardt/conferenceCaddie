@@ -126,6 +126,9 @@ class BleRadioService : Service() {
      */
     private var needsAppToListen = false
 
+    /** Whether the notification shown now is a demo conference's ([BleRadioNotification.build]). */
+    private var shownDemo = false
+
     /** The connections that read the token, and which payload each was served; read from a GATT binder thread too. */
     private val readers = BleTokenReaders()
 
@@ -300,8 +303,11 @@ class BleRadioService : Service() {
 
     /** Starts the foreground state (or shows its notification again); returns why it was refused, or null. */
     private fun enterForeground(): BleStopReason? {
-        val icon = (radio ?: AndroidBleRadio.existing())?.notificationIcon ?: applicationInfo.icon
-        val notification = BleRadioNotification.build(this, icon, openToListen = needsAppToListen)
+        val r = radio ?: AndroidBleRadio.existing()
+        val icon = r?.notificationIcon ?: applicationInfo.icon
+        // A demo conference's radio says so in the notification (Demo.notification).
+        shownDemo = (active ?: r?.session)?.config?.demo == true
+        val notification = BleRadioNotification.build(this, icon, openToListen = needsAppToListen, demo = shownDemo)
         return try {
             if (Build.VERSION.SDK_INT >= 29) {
                 startForeground(BleRadioNotification.NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
@@ -332,6 +338,8 @@ class BleRadioService : Service() {
         val now = r.clock()
         deadlineElapsed = SystemClock.elapsedRealtime() + (s.config.untilEpochMillis - now)
         active = s
+        // The notification went up before this session, or for another conference: say whether it is a demo.
+        if (s.config.demo != shownDemo) enterForeground()
         val reason = when {
             s.config.untilEpochMillis <= now -> BleStopReason.System
             !hw.enabled() -> BleStopReason.BluetoothOff

@@ -211,6 +211,11 @@ internal data class ConferenceRecord(
     @SerialName("delete_pending") val deletePending: DeleteRetry? = null,
     /** Bluetooth proximity's switch and bookkeeping at this conference. */
     val ble: BleRecord = BleRecord(),
+    /**
+     * True when this is a demo conference, kept when presence or Bluetooth turns on, so a
+     * notification about it says so even while the conference list is not loaded.
+     */
+    val demo: Boolean = false,
 ) {
     internal fun sanitized(): ConferenceRecord = copy(
         visibility = visibility.sanitized(),
@@ -221,6 +226,6 @@ internal data class ConferenceRecord(
         ble = ble.copy(notifiedAt = ble.notifiedAt.takeLast(10)),
     )
 
-    /** True when nothing but defaults is left, so the record can be removed. */
-    internal val isEmpty: Boolean get() = this == ConferenceRecord()
+    /** True when nothing but defaults is left, so the record can be removed; the demo mark alone keeps nothing. */
+    internal val isEmpty: Boolean get() = copy(demo = false) == ConferenceRecord()
 }

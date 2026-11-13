@@ -51,6 +51,13 @@ export interface MockPerson {
 
 const A = 'sample-cloud-summit-2026';
 const B = 'sample-dev-day-2026';
+/** The demo conference ("demo": true), as the server lists it; its dates follow the clock. */
+export const DEMO = 'caddie-demo-conference';
+
+/** The UTC date `days` away from today, so the demo conference runs from yesterday to tomorrow. */
+function demoDay(days: number): string {
+  return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+}
 
 export const MOCK_CONFERENCES: Conference[] = [
   {
@@ -82,6 +89,25 @@ export const MOCK_CONFERENCES: Conference[] = [
     track_group: 'Topic',
     tag_groups: ['Programme'],
     talk_count: 6,
+  },
+  // The demo conference, after the sample conferences so "/" still opens Sample Cloud Summit while
+  // it runs. Its talks and speakers are invented, it has no official schedule page, and the app
+  // labels it Demo everywhere.
+  {
+    slug: DEMO,
+    name: 'Caddie Demo Conference',
+    start_date: demoDay(-1),
+    end_date: demoDay(1),
+    time_zone: 'UTC',
+    location: { city: 'Demo City', region: '', country: '', virtual: false },
+    status: 'searchable',
+    official_schedule_url: null,
+    source: 'demo',
+    has_level: false,
+    track_group: 'Track',
+    tag_groups: [],
+    talk_count: 6,
+    demo: true,
   },
   {
     slug: 'sample-open-source-forum-2026',
@@ -228,9 +254,42 @@ export const MOCK_TALKS: MockTalk[] = [
   talk(B, EAT, 26, '2026-11-20', '15:00', '15:30', { track: 'Sample Topic 2', tags: [prog('Keynote stage')], topicIds: ['security'] }),
 ];
 
+/** A talk of the demo conference: invented title and speakers, no official page, times in UTC. */
+function demoTalk(n: number, days: number, start: string, end: string, title: string, speakers: string[], room: string, topicIds: string[]): MockTalk {
+  const day = demoDay(days);
+  return {
+    talk_id: `${DEMO}:${1000 + n}`,
+    conference: DEMO,
+    kind: 'talk',
+    title,
+    speakers,
+    room,
+    start: `${day}T${start}:00+00:00`,
+    end: `${day}T${end}:00+00:00`,
+    track: 'Demo Track',
+    level: null,
+    tags: [],
+    topics: topicIds.map((t) => ({ topic_id: t, label: TOPIC_LABELS[t] ?? t })),
+    speaker_profiles: speakers.map((name) => ({ name, tagline: 'Invented speaker for the demo conference', links: [] })),
+    slides_url: null,
+    url: null,
+    abstract: `An invented talk of the demo conference about kubernetes, security and observability, so mock searches find something.`,
+    sponsor: false,
+  };
+}
+
+MOCK_TALKS.push(
+  demoTalk(41, -1, '09:00', '09:30', 'Demo talk: Kubernetes upgrades without the drama', ['Ada Inventa', 'Bo Madeup'], 'Demo Hall', ['kubernetes', 'platform-engineering']),
+  demoTalk(42, -1, '14:00', '14:45', 'Demo talk: Tracing a request through eBPF', ['Cy Fictive'], 'Demo Room 2', ['ebpf', 'observability']),
+  demoTalk(43, 0, '09:00', '09:30', 'Demo talk: Supply-chain security in one afternoon', ['Dee Pretend'], 'Demo Hall', ['security']),
+  demoTalk(44, 0, '13:00', '13:30', 'Demo talk: Running inference next to the service mesh', ['Ada Inventa'], 'Demo Room 2', ['ai', 'service-mesh']),
+  demoTalk(45, 1, '10:00', '10:45', 'Demo talk: WebAssembly plugins for platform teams', ['Eli Imaginary', 'Bo Madeup'], 'Demo Hall', ['wasm', 'platform-engineering']),
+  demoTalk(46, 1, '15:00', '15:30', 'Demo talk: Observability budgets that hold', ['Cy Fictive'], 'Demo Room 2', ['observability', 'security']),
+);
+
 export const MOCK_TOPICS: MockTopic[] = (() => {
   const out: MockTopic[] = [];
-  for (const c of [A, B]) {
+  for (const c of [A, B, DEMO]) {
     const counts = new Map<string, number>();
     for (const t of MOCK_TALKS.filter((x) => x.conference === c)) {
       for (const tp of t.topics ?? []) counts.set(tp.topic_id, (counts.get(tp.topic_id) ?? 0) + 1);
@@ -388,7 +447,27 @@ export const MOCK_PEOPLE: MockPerson[] = [
     joins_zone: 'Hallway',
   }),
   ...FILLER,
+  // The demo conference's sample people: two are around, and Kit asks to talk shop once presence is on.
+  person(201, DEMO, 'Jo', ['observability'], ['kubernetes', 'security'], [`${DEMO}:1043`], true, {
+    expertise: 'Ran Kubernetes upgrades for a demo platform; wrote the checklist everyone now copies.',
+    interests: 'Security reviews that do not stall a release.',
+    zone: 'Demo Hall',
+    spot: 'by the stage',
+  }),
+  person(202, DEMO, 'Kit', ['security'], ['ebpf', 'observability'], [`${DEMO}:1042`], true, {
+    expertise: 'Tuned eBPF probes in production until the overhead fell under one percent.',
+    interests: 'Tracing across clusters without a sidecar per pod.',
+    zone: 'Expo hall',
+    spot: 'by the coffee cart',
+  }),
+  person(203, DEMO, 'Lou', ['ai'], ['platform-engineering'], [], true, {
+    expertise: 'Built an internal developer portal for a demo company and then replaced half of it.',
+    interests: 'Running inference workloads on a shared platform.',
+  }),
 ];
 
 /** The sample person who asks the user to talk shop shortly after presence is turned on. */
 export const MOCK_REQUESTER_REF = 'mockref000000002';
+
+/** The demo conference's sample person who asks to talk shop once presence is on there. */
+export const MOCK_DEMO_REQUESTER_REF = 'mockref000000202';

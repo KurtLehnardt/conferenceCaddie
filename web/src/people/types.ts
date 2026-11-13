@@ -7,6 +7,8 @@ export interface ConferenceLike {
   start_date?: string;
   end_date?: string;
   time_zone?: string | null;
+  /** True for a demo conference (components/demo.ts). */
+  demo?: boolean;
 }
 
 /** The talk fields the people screens read. A shell talk result fits this. */
@@ -15,7 +17,7 @@ export interface TalkLike {
   title: string;
   start: string;
   end: string;
-  url?: string;
+  url?: string | null;
   room?: string | null;
   speakers?: string[];
 }
@@ -179,14 +181,15 @@ export interface SpeakerProfile {
 }
 
 export interface CircleMembers {
-  talk: { title: string; start: string; end: string; url: string };
+  talk: { title: string; start: string; end: string; url: string | null };
   speakers: SpeakerProfile[];
   count: number;
   members: PersonResult[];
 }
 
 export interface Recommendation extends TalkLike {
-  url: string;
+  /** Null when the talk has no official page, as a demo conference's talks do. */
+  url: string | null;
   room: string | null;
   speakers: string[];
   track?: string;

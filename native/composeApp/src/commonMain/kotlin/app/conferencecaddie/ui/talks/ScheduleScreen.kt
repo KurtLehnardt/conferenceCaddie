@@ -40,6 +40,7 @@ import app.conferencecaddie.shared.search.SearchRequest
 import app.conferencecaddie.shared.search.SearchResult
 import app.conferencecaddie.ui.components.ButtonVariant
 import app.conferencecaddie.ui.components.CaddieButton
+import app.conferencecaddie.ui.components.DemoNote
 import app.conferencecaddie.ui.components.Hairline
 import app.conferencecaddie.ui.components.NoteText
 import app.conferencecaddie.ui.components.SegmentOption
@@ -250,7 +251,12 @@ fun ScheduleScreen(
         contentPadding = PaddingValues(bottom = 24.dp),
     ) {
         item("days") {
-            DayChips(days, day, onChange = { model.day = it }, today = today.takeIf { running })
+            // A demo conference's note scrolls with the schedule, inside its first item so the
+            // items keep the indices the jump to now counts on (HEADER_ITEMS).
+            Column(Modifier.fillMaxWidth()) {
+                DemoNote(conference.demo, Modifier.padding(start = Caddie.dimens.gutter, end = Caddie.dimens.gutter, bottom = 8.dp))
+                DayChips(days, day, onChange = { model.day = it }, today = today.takeIf { running })
+            }
         }
         item("chips") {
             FilterChips(

@@ -125,12 +125,13 @@ internal fun <T> ComposeUiTest.u2Await(rig: U2Rig, block: suspend () -> T): T {
 
 /**
  * The Alpha conference with people features on; a profile named [name] wanting to learn eBPF (none
- * with null), visible conference-wide when [visible], and around in [zone] when it is set.
+ * with null), visible conference-wide when [visible], and around in [zone] when it is set. With
+ * [demo], Alpha is a demo conference.
  */
 @OptIn(ExperimentalTestApi::class)
-internal fun ComposeUiTest.u2Ready(rig: U2Rig, name: String? = "Me Myself", visible: Boolean = true, zone: String? = null) {
+internal fun ComposeUiTest.u2Ready(rig: U2Rig, name: String? = "Me Myself", visible: Boolean = true, zone: String? = null, demo: Boolean = false) {
     u2Await(rig) {
-        rig.controller.updateContext(PeopleContext(testBackendUrl(), U2_PEOPLE_ON.forThisApp(), ConferenceInfo(rig.slug, "Alpha Conference", "UTC"), bundle = null))
+        rig.controller.updateContext(PeopleContext(testBackendUrl(), U2_PEOPLE_ON.forThisApp(), ConferenceInfo(rig.slug, "Alpha Conference", "UTC", demo = demo), bundle = null))
         if (name != null) {
             rig.controller.updateProfile { it.copy(displayName = name, about = "Tester.", interests = "tracing") }
             rig.controller.setTopics(learn = listOf(TopicRef("ebpf", "eBPF")), speak = emptyList())

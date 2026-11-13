@@ -48,7 +48,7 @@ export function proximityLabel(band: PersonResult['proximity']): string | null {
 // A line to show under a list of people when any of them is a sample profile.
 export function SampleNote({ people }: { people: PersonResult[] }) {
   if (!people.some((p) => p.sample)) return null;
-  return <p class="pp-sample-note">Profiles marked Sample are demo profiles, not real attendees.</p>;
+  return <p class="pp-sample-note">Profiles marked Sample are sample profiles, not real attendees.</p>;
 }
 
 export function PersonCard({ person, slug }: { person: PersonResult; slug: string }) {

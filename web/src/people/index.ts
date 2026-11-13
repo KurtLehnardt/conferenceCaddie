@@ -39,6 +39,7 @@ export { ShareAllControls } from './ShareAllControls';
 export { InboxScreen } from './InboxScreen';
 export { MeetScreen } from './MeetScreen';
 export { BlockedPeople, NudgeSettings, PeopleIMet, PeopleIWatch } from './SettingsPeople';
+export { SettingsPeopleGroups } from './SettingsGroups';
 export { getWatches, isWatched, toggleWatch, removeWatch } from './watch';
 export { NudgeSetting } from './NudgeBanner';
 export { onInterestedChanged, startDeleteRetries } from './sync';

@@ -4,11 +4,13 @@ import app.conferencecaddie.shared.fixtures.Fixtures
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
@@ -90,5 +92,30 @@ class ConferenceIndexTest {
         val first = index.getValue("conferences").jsonArray[0].jsonObject
         val api = index.set("conferences", JsonArray(listOf(JsonObject(first - "bundle"))))
         assertEquals(BundleStatus.None, ConferenceIndex.read(api).conferences.single().bundleStatus)
+    }
+
+    @Test
+    fun onlyTheLiteralTrueMarksADemoConference() {
+        val first = JsonObject(index.getValue("conferences").jsonArray[0].jsonObject - "bundle")
+        assertFalse(assertNotNull(Conference.read(first)).demo, "an entry without the field is a real conference")
+        assertTrue(assertNotNull(Conference.read(first.set("demo", JsonPrimitive(true)))).demo)
+        // Any other value still reads as a conference, a real one: the field is optional and open.
+        listOf(JsonPrimitive(false), JsonPrimitive("true"), JsonPrimitive(1), JsonNull, json("{}"), json("[true]")).forEach { v ->
+            val c = assertNotNull(Conference.read(first.set("demo", v)), "demo = $v still reads")
+            assertFalse(c.demo, "demo = $v is not a demo conference")
+        }
+    }
+
+    @Test
+    fun theIndexAndTheBundleCarryTheDemoMark() {
+        val first = index.getValue("conferences").jsonArray[0].jsonObject
+        val demo = index.set("conferences", JsonArray(listOf(first.set("demo", JsonPrimitive(true)), first.set("slug", JsonPrimitive("real-2099")))))
+        assertEquals(listOf(true, false), ConferenceIndex.read(demo).conferences.map { it.conference.demo })
+
+        // The bundle's own conference (bundle.json "conference") is read by the same parser.
+        val bundle = json(Fixtures.files.getValue("bundle.json").decodeToString()).jsonObject
+        val marked = bundle.set("conference", bundle.getValue("conference").jsonObject.set("demo", JsonPrimitive(true)))
+        assertTrue(assertNotNull(TalkBundle.decode(Fixtures.HASH, marked)).conference.demo)
+        assertFalse(assertNotNull(TalkBundle.decode(Fixtures.HASH, bundle)).conference.demo)
     }
 }

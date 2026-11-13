@@ -38,6 +38,7 @@ import app.conferencecaddie.shared.people.SyncStatus
 import app.conferencecaddie.ui.components.ButtonVariant
 import app.conferencecaddie.ui.components.CaddieButton
 import app.conferencecaddie.ui.components.CaddieChip
+import app.conferencecaddie.ui.components.DemoNote
 import app.conferencecaddie.ui.icons.LucideIcon
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -337,6 +338,8 @@ fun PeopleScreen(
     ) {
         item(key = "top", contentType = "top") {
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(PeopleScreenGap)) {
+                // Inside the top item, so the rows keep their indices (the reveal above counts on them).
+                DemoNote(state.conference?.demo == true)
                 StillHereRow(state, host)
                 NudgeBanner(state, host, onSeeWho = showAround)
                 PresenceControls(state, host, hereZone = pendingHere, onHereZoneHandled = { pendingHere = null })
