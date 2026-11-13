@@ -313,10 +313,10 @@ jobs:
 
       # Only the bundle builder's outputs, the landing page and the privacy page may be published: no
       # app code. The github.io origin is shared with other Pages sites of the same account, so a
-      # script published here could read their storage. The check therefore looks below the top level too, rejects
-      # every symlink and every other entry that is not a plain file or directory (the artifact is
-      # packed with tar --dereference, which would copy what a link points at), and allows under
-      # bundles/ only the files the bundle builder writes. This is an early failure: the verify job
+      # script published here could read their storage. The check therefore looks below the top
+      # level too, rejects every symlink and every other entry that is not a plain file or directory
+      # (the artifact is packed with tar --dereference, which would copy what a link points at), and
+      # allows under bundles/ only the files the bundle builder writes. This is an early failure: the verify job
       # repeats the checks on the packed artifact, outside the job that ran the third-party code.
       - name: Check the site holds no web app
         run: |
