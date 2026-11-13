@@ -266,8 +266,33 @@ class PeopleLiveTest {
         h.controller.backgroundCheck()
         val shown = h.notifier.shown.single()
         assertEquals("Conference Caddie (Demo)", shown.title)
-        assertEquals("Demo: Someone who's worked on Built eBPF probes is in Hallway right now", shown.body, "the banner's words after Demo: ")
+        assertEquals("Demo: someone who's worked on Built eBPF probes is in Hallway right now", shown.body, "the banner's words after Demo: ")
         assertEquals("Someone who's worked on Built eBPF probes is in Hallway right now", h.state.nudge?.text, "the banner itself keeps its words")
+    }
+
+    @Test
+    fun theDemoMarkIsKeptWithPresenceOnceItIsOn() = runTest {
+        val h = PeopleHarness(this)
+        h.conference = FIXTURE_CONFERENCE.copy(demo = true)
+        h.start()
+        h.visible()
+        val key = h.kv.map.keys.single { it.endsWith("#conference:$FIXTURE_SLUG") }
+        assertFalse(h.kv.map.getValue(key).contains("\"demo\":true"), "nothing is kept before presence turns on")
+        assertNull(h.controller.turnOnPresence("Hallway", ""))
+        runCurrent()
+        assertTrue(h.kv.map.getValue(key).contains("\"demo\":true"), "kept in the record that holds presence")
+    }
+
+    @Test
+    fun aFailedTurnOnKeepsNoDemoMark() = runTest {
+        val h = PeopleHarness(this)
+        h.conference = FIXTURE_CONFERENCE.copy(demo = true)
+        h.start()
+        h.visible()
+        h.server.presencePut = { FakeApiHttp.json(503, """{"error":"People are temporarily unavailable"}""") }
+        assertNotNull(h.controller.turnOnPresence("Hallway", ""))
+        runCurrent()
+        assertFalse(h.kv.map.values.any { it.contains("\"demo\":true") })
     }
 
     @Test

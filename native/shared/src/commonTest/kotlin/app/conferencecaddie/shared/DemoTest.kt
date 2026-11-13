@@ -23,7 +23,8 @@ class DemoTest {
     fun aNotificationAboutADemoConferenceIsTitledAndPrefixedOneWay() {
         assertEquals("Conference Caddie (Demo)", Demo.notificationTitle("Conference Caddie", demo = true))
         assertEquals("Conference Caddie", Demo.notificationTitle("Conference Caddie", demo = false))
-        assertEquals("Demo: Someone is near you", Demo.notificationBody("Someone is near you", demo = true))
+        // Lower case after the prefix, as the server writes it.
+        assertEquals("Demo: someone is near you", Demo.notificationBody("Someone is near you", demo = true))
         assertEquals("Someone is near you", Demo.notificationBody("Someone is near you", demo = false))
     }
 

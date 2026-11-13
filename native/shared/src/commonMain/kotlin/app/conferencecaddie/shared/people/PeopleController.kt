@@ -383,8 +383,11 @@ class PeopleController(
         val r = ready()?.takeIf { it.features.presence } ?: return@write PeopleError.NOT_OFFERED_MESSAGE
         // A write without `ble` leaves Bluetooth as it is on the server; a new until reaches the
         // radio through PresenceHost.presenceChanged.
-        r.s.rememberDemo(r.slug)
-        r.s.presenceRuntime.turnOn(r.slug, zone, spot, mode ?: r.s.presenceRuntime.get(r.slug).mode).also { publish() }
+        r.s.presenceRuntime.turnOn(r.slug, zone, spot, mode ?: r.s.presenceRuntime.get(r.slug).mode).also {
+            // After the turn-on, so the record holds presence and keeps the mark with it.
+            if (it == null) r.s.rememberDemo(r.slug)
+            publish()
+        }
     }
 
     /** "Extend": keeps the zone and spot and starts a fresh hour (or renews the day). */
@@ -414,8 +417,10 @@ class PeopleController(
      */
     suspend fun turnOnBluetooth(): BleOutcome = write(BleOutcome.Problem(BleProblem.Failed, PeopleText.BLE_START_FAILED)) {
         val r = ready()?.takeIf { it.features.presence } ?: return@write BleOutcome.Problem(BleProblem.Unsupported, PeopleText.BLE_UNSUPPORTED)
-        r.s.rememberDemo(r.slug)
-        r.s.ble.turnOn(r.slug).also { publish() }
+        r.s.ble.turnOn(r.slug).also {
+            if (it == BleOutcome.On) r.s.rememberDemo(r.slug)
+            publish()
+        }
     }
 
     /** Turns Bluetooth proximity off at the selected conference and tells the server (`ble: false`); presence stays. */
@@ -988,7 +993,9 @@ class PeopleController(
 
         /**
          * Keeps on the device whether [slug] is a demo conference, as the context says now, so its
-         * notifications still say so later when the context does not name it ([demo]).
+         * notifications still say so later when the context does not name it ([demo]). Called after
+         * presence or Bluetooth turned on, when the record holds that state: the mark alone never
+         * keeps a record ([ConferenceRecord.isEmpty]).
          */
         suspend fun rememberDemo(slug: String) {
             val demo = contextDemo(slug) ?: return

@@ -415,7 +415,7 @@ class BleRekeyNotifyTest {
         runCurrent()
         val shown = b.h.notifier.ble().single()
         assertEquals("Conference Caddie (Demo)", shown.title)
-        assertEquals("Demo: Someone who's worked on Kubernetes is right near you", shown.body)
+        assertEquals("Demo: someone who's worked on Kubernetes is right near you", shown.body)
     }
 
     @Test

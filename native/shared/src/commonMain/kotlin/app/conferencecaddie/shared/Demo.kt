@@ -29,15 +29,20 @@ object Demo {
     /** The title of a notification about a conference: [title] ("Conference Caddie"), with "(Demo)" after it for a demo conference. */
     fun notificationTitle(title: String, demo: Boolean): String = name(title, demo)
 
-    /** The body of a notification about a conference: [body], after "Demo: " for a demo conference. */
-    fun notificationBody(body: String, demo: Boolean): String = if (demo) BODY_PREFIX + body else body
+    /**
+     * The body of a notification about a conference: for a demo conference "Demo: " and [body] with
+     * its first letter in lower case, as the server writes it ("Demo: someone who's worked on…");
+     * [body] otherwise.
+     */
+    fun notificationBody(body: String, demo: Boolean): String = if (demo) BODY_PREFIX + body.replaceFirstChar { it.lowercaseChar() } else body
 
     /**
      * The title and body of a notification whose own title says more than the app's name (Android's
      * ongoing Bluetooth notification, "Conference Caddie is finding people near you"). For a demo
      * conference the title becomes "Conference Caddie (Demo)" like every other, and the body keeps
-     * the old title as its first sentence, after "Demo: ", so nothing it said is lost.
+     * the old title as its first sentence, after "Demo: ", so nothing it said is lost. That sentence
+     * starts with the app's name, which keeps its capital.
      */
     fun notification(appName: String, title: String, body: String, demo: Boolean): Pair<String, String> =
-        if (demo) notificationTitle(appName, true) to notificationBody("$title. $body", true) else title to body
+        if (demo) notificationTitle(appName, true) to "$BODY_PREFIX$title. $body" else title to body
 }
