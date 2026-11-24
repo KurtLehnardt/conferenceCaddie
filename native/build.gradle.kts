@@ -69,7 +69,7 @@ subprojects {
 // so a rename cannot switch a floor off without notice.
 val toolingFloors = buildscript.configurations.getByName("classpath").dependencyConstraints
     .filter { it.reason.orEmpty().startsWith("tooling floor: ") }
-val nettyBom = "io.netty:netty-bom:4.1.140.Final"
+val nettyBom = "io.netty:netty-bom:4.1.141.Final"
 // Lowest allowed version per "group:name"; "group:*" covers every module of the group on the same major.
 val toolingFloorVersions = toolingFloors.associate { "${it.group}:${it.name}" to it.version!! } +
     ("io.netty:*" to nettyBom.substringAfterLast(':'))
